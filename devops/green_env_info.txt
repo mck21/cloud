@@ -1,0 +1,18 @@
+GREEN ENVIRONMENT INFORMATION
+=============================
+Timestamp: lun 17 nov 2025 20:19:40 CET
+
+BLUE Environment:
+  Name: mck11-app-blue
+  URL: http://mck11-app-blue.us-east-1.elasticbeanstalk.com
+  Version: 1.0.0
+  Health: Grey
+
+GREEN Environment:
+  Name: mck21-app-green
+  URL: http://mck11-app-green.us-east-1.elasticbeanstalk.com
+  Version: 1.0.1
+  Health: Green
+
+Region: us-east-1
+Application: mck21-app

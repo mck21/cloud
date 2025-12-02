@@ -1,8 +1,13 @@
 #!/usr/bin/env python3
 
 """
-Script: Crear VPC con subred pública, privada e Internet Gateway
-Paso 3: VPC + DNS + subnets + IGW
+Script: Crear infraestructura inicial en AWS con tag mck21
+Incluye:
+- VPC
+- Subnet pública
+- Subnet privada
+- Internet Gateway
+- Route Table pública y privada
 """
 
 import boto3
@@ -10,6 +15,9 @@ import sys
 from botocore.exceptions import ClientError
 
 
+# ============================
+#  Colores terminal
+# ============================
 class Colors:
     GREEN = '\033[0;32m'
     YELLOW = '\033[1;33m'
@@ -17,35 +25,32 @@ class Colors:
     NC = '\033[0m'
 
 
-# ------------------------------
-# Configuración general
-# ------------------------------
+def print_color(color, message):
+    print(f"{color}{message}{Colors.NC}")
+
+
+# ============================
+#  Configuración
+# ============================
 VPC_CIDR = "172.16.0.0/16"
 VPC_NAME = "vpc-mck21"
+
 TAG_KEY = "tag"
 TAG_VALUE = "mck21"
 
 PUBLIC_SUBNET_CIDR = "172.16.1.0/24"
 PRIVATE_SUBNET_CIDR = "172.16.2.0/24"
 
-PUBLIC_SUBNET_NAME = "public-subnet-mck21"
-PRIVATE_SUBNET_NAME = "private-subnet-mck21"
 
-
-def print_color(color, msg):
-    print(f"{color}{msg}{Colors.NC}")
-
-
-# ------------------------------
-# Helpers
-# ------------------------------
+# ============================
+#  Funciones VPC
+# ============================
 def get_vpc_by_tag(ec2, name):
-    """Busca VPC por nombre y tag=mck21"""
     try:
         response = ec2.describe_vpcs(
             Filters=[
-                {"Name": "tag:Name", "Values": [name]},
-                {"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]},
+                {'Name': 'tag:Name', 'Values': [name]},
+                {'Name': f'tag:{TAG_KEY}', 'Values': [TAG_VALUE]},
             ]
         )
         if response["Vpcs"]:
@@ -57,30 +62,32 @@ def get_vpc_by_tag(ec2, name):
 
 
 def create_vpc(ec2):
-    """Crea VPC si no existe"""
-    existing = get_vpc_by_tag(ec2, VPC_NAME)
-    if existing:
-        return existing
+    print_color(Colors.YELLOW, "Creando VPC...")
+
+    vpc_id = get_vpc_by_tag(ec2, VPC_NAME)
+    if vpc_id:
+        print_color(Colors.GREEN, f"✓ VPC ya existe: {vpc_id}")
+        return vpc_id
 
     try:
         response = ec2.create_vpc(
             CidrBlock=VPC_CIDR,
             TagSpecifications=[
                 {
-                    "ResourceType": "vpc",
-                    "Tags": [
-                        {"Key": "Name", "Value": VPC_NAME},
-                        {"Key": TAG_KEY, "Value": TAG_VALUE},
+                    'ResourceType': 'vpc',
+                    'Tags': [
+                        {'Key': 'Name', 'Value': VPC_NAME},
+                        {'Key': TAG_KEY, 'Value': TAG_VALUE},
                     ],
                 }
             ],
         )
-
         vpc_id = response["Vpc"]["VpcId"]
 
-        ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsSupport={"Value": True})
-        ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsHostnames={"Value": True})
+        ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsSupport={'Value': True})
+        ec2.modify_vpc_attribute(VpcId=vpc_id, EnableDnsHostnames={'Value': True})
 
+        print_color(Colors.GREEN, f"✓ VPC creada: {vpc_id}")
         return vpc_id
 
     except ClientError as e:
@@ -88,28 +95,30 @@ def create_vpc(ec2):
         sys.exit(1)
 
 
-def find_subnet(ec2, cidr, vpc_id):
-    """Busca subnet por CIDR"""
+# ============================
+#  Subnets
+# ============================
+def find_subnet(ec2, cidr):
     try:
         response = ec2.describe_subnets(
             Filters=[
                 {"Name": "cidr-block", "Values": [cidr]},
-                {"Name": "vpc-id", "Values": [vpc_id]},
                 {"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]},
             ]
         )
         if response["Subnets"]:
             return response["Subnets"][0]["SubnetId"]
         return None
-    except ClientError as e:
-        print_color(Colors.RED, f"Error buscando subnet: {e}")
+    except ClientError:
         return None
 
 
 def create_subnet(ec2, vpc_id, cidr, name):
-    """Crea subred si no existe"""
-    existing = find_subnet(ec2, cidr, vpc_id)
+    print_color(Colors.YELLOW, f"Creando subnet {name}...")
+
+    existing = find_subnet(ec2, cidr)
     if existing:
+        print_color(Colors.GREEN, f"✓ Subnet {name} ya existe: {existing}")
         return existing
 
     try:
@@ -126,16 +135,20 @@ def create_subnet(ec2, vpc_id, cidr, name):
                 }
             ],
         )
+        subnet_id = response["Subnet"]["SubnetId"]
 
-        return response["Subnet"]["SubnetId"]
+        print_color(Colors.GREEN, f"✓ Subnet {name} creada: {subnet_id}")
+        return subnet_id
 
     except ClientError as e:
         print_color(Colors.RED, f"✗ Error creando subnet {name}: {e}")
         sys.exit(1)
 
 
+# ============================
+#  Internet Gateway
+# ============================
 def find_igw(ec2, vpc_id):
-    """Busca IGW asociado a la VPC"""
     try:
         response = ec2.describe_internet_gateways(
             Filters=[
@@ -146,15 +159,16 @@ def find_igw(ec2, vpc_id):
         if response["InternetGateways"]:
             return response["InternetGateways"][0]["InternetGatewayId"]
         return None
-    except ClientError as e:
-        print_color(Colors.RED, f"Error buscando IGW: {e}")
+    except ClientError:
         return None
 
 
 def create_internet_gateway(ec2, vpc_id):
-    """Crea IGW si no existe"""
+    print_color(Colors.YELLOW, "Creando Internet Gateway...")
+
     existing = find_igw(ec2, vpc_id)
     if existing:
+        print_color(Colors.GREEN, f"✓ IGW ya existe: {existing}")
         return existing
 
     try:
@@ -169,61 +183,151 @@ def create_internet_gateway(ec2, vpc_id):
                 }
             ]
         )
-
         igw_id = response["InternetGateway"]["InternetGatewayId"]
 
         ec2.attach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
 
+        print_color(Colors.GREEN, f"✓ IGW creado y adjuntado: {igw_id}")
         return igw_id
 
     except ClientError as e:
-        print_color(Colors.RED, f"✗ Error creando o adjuntando IGW: {e}")
+        print_color(Colors.RED, f"✗ Error creando IGW: {e}")
         sys.exit(1)
 
 
-# ------------------------------
-# Main
-# ------------------------------
+# ============================
+#  Route Tables
+# ============================
+def find_route_table(ec2, vpc_id, name):
+    try:
+        response = ec2.describe_route_tables(
+            Filters=[
+                {"Name": "vpc-id", "Values": [vpc_id]},
+                {"Name": f"tag:Name", "Values": [name]},
+                {"Name": f"tag:{TAG_KEY}", "Values": [TAG_VALUE]},
+            ]
+        )
+        if response["RouteTables"]:
+            return response["RouteTables"][0]["RouteTableId"]
+        return None
+    except ClientError:
+        return None
+
+
+def create_public_route_table(ec2, vpc_id, igw_id, subnet_id):
+    print_color(Colors.YELLOW, "Creando Route Table pública...")
+
+    name = "rtb-public-mck21"
+    existing = find_route_table(ec2, vpc_id, name)
+    if existing:
+        print_color(Colors.GREEN, f"✓ Route Table pública ya existe: {existing}")
+        return existing
+
+    try:
+        response = ec2.create_route_table(
+            VpcId=vpc_id,
+            TagSpecifications=[
+                {
+                    "ResourceType": "route-table",
+                    "Tags": [
+                        {"Key": "Name", "Value": name},
+                        {"Key": TAG_KEY, "Value": TAG_VALUE},
+                    ],
+                }
+            ],
+        )
+        rtb_id = response["RouteTable"]["RouteTableId"]
+
+        # Crear ruta hacia el IGW
+        ec2.create_route(
+            RouteTableId=rtb_id,
+            DestinationCidrBlock="0.0.0.0/0",
+            GatewayId=igw_id,
+        )
+
+        # Asociar la subnet pública
+        ec2.associate_route_table(
+            RouteTableId=rtb_id,
+            SubnetId=subnet_id,
+        )
+
+        print_color(Colors.GREEN, f"✓ RTB pública creada: {rtb_id}")
+        return rtb_id
+
+    except ClientError as e:
+        print_color(Colors.RED, f"✗ Error creando RTB pública: {e}")
+        sys.exit(1)
+
+
+def create_private_route_table(ec2, vpc_id, subnet_id):
+    print_color(Colors.YELLOW, "Creando Route Table privada...")
+
+    name = "rtb-private-mck21"
+    existing = find_route_table(ec2, vpc_id, name)
+    if existing:
+        print_color(Colors.GREEN, f"✓ Route Table privada ya existe: {existing}")
+        return existing
+
+    try:
+        response = ec2.create_route_table(
+            VpcId=vpc_id,
+            TagSpecifications=[
+                {
+                    "ResourceType": "route-table",
+                    "Tags": [
+                        {"Key": "Name", "Value": name},
+                        {"Key": TAG_KEY, "Value": TAG_VALUE},
+                    ],
+                }
+            ]
+        )
+        rtb_id = response["RouteTable"]["RouteTableId"]
+
+        # Asociar subnet privada
+        ec2.associate_route_table(
+            RouteTableId=rtb_id,
+            SubnetId=subnet_id,
+        )
+
+        print_color(Colors.GREEN, f"✓ RTB privada creada: {rtb_id}")
+        return rtb_id
+
+    except ClientError as e:
+        print_color(Colors.RED, f"✗ Error creando RTB privada: {e}")
+        sys.exit(1)
+
+
+# ============================
+#  MAIN
+# ============================
 def main():
-    print_color(Colors.GREEN, "\n=== Creación de infraestructura base (VPC + Subnets + IGW) ===\n")
+    print_color(Colors.GREEN, "=== Creando infraestructura AWS mck21 ===")
 
     ec2 = boto3.client("ec2")
 
-    # Paso 1: VPC
-    print_color(Colors.YELLOW, "[1/4] Creando o verificando VPC...")
+    # 1 — VPC
     vpc_id = create_vpc(ec2)
-    print_color(Colors.GREEN, f"✓ VPC lista: {vpc_id}")
 
-    # Paso 2: Subnet pública
-    print_color(Colors.YELLOW, "\n[2/4] Creando subnet pública...")
-    public_subnet_id = create_subnet(ec2, vpc_id, PUBLIC_SUBNET_CIDR, PUBLIC_SUBNET_NAME)
-    print_color(Colors.GREEN, f"✓ Subnet pública lista: {public_subnet_id}")
+    # 2 — Subnets
+    public_subnet_id = create_subnet(ec2, vpc_id, PUBLIC_SUBNET_CIDR, "subnet-public-mck21")
+    private_subnet_id = create_subnet(ec2, vpc_id, PRIVATE_SUBNET_CIDR, "subnet-private-mck21")
 
-    # Paso 3: Subnet privada
-    print_color(Colors.YELLOW, "\n[3/4] Creando subnet privada...")
-    private_subnet_id = create_subnet(ec2, vpc_id, PRIVATE_SUBNET_CIDR, PRIVATE_SUBNET_NAME)
-    print_color(Colors.GREEN, f"✓ Subnet privada lista: {private_subnet_id}")
-
-    # Paso 4: Internet Gateway
-    print_color(Colors.YELLOW, "\n[4/4] Creando Internet Gateway...")
+    # 3 — IGW
     igw_id = create_internet_gateway(ec2, vpc_id)
-    print_color(Colors.GREEN, f"✓ Internet Gateway listo: {igw_id}")
+
+    # 4 — Route Tables
+    public_rtb_id = create_public_route_table(ec2, vpc_id, igw_id, public_subnet_id)
+    private_rtb_id = create_private_route_table(ec2, vpc_id, private_subnet_id)
 
     # Resumen
-    print_color(Colors.GREEN, "\n========================================")
-    print_color(Colors.GREEN, "  Recursos creados exitosamente")
-    print_color(Colors.GREEN, "========================================")
-    print(f"VPC ID:              {vpc_id}")
-    print(f"Public Subnet ID:    {public_subnet_id}")
-    print(f"Private Subnet ID:   {private_subnet_id}")
-    print(f"Internet Gateway ID: {igw_id}")
-    print(f"CIDR VPC:            {VPC_CIDR}")
-    print(f"CIDR Public:         {PUBLIC_SUBNET_CIDR}")
-    print(f"CIDR Private:        {PRIVATE_SUBNET_CIDR}")
-    print(f"Tag global:          {TAG_KEY}={TAG_VALUE}")
-    print_color(Colors.GREEN, "========================================\n")
-
-    print_color(Colors.GREEN, "✓ Script completado exitosamente\n")
+    print_color(Colors.GREEN, "\n=== RESUMEN DE RECURSOS CREADOS ===")
+    print(f"VPC: {vpc_id}")
+    print(f"Subnet Pública: {public_subnet_id}")
+    print(f"Subnet Privada: {private_subnet_id}")
+    print(f"Internet Gateway: {igw_id}")
+    print(f"Route Table Pública: {public_rtb_id}")
+    print(f"Route Table Privada: {private_rtb_id}")
+    print_color(Colors.GREEN, "=====================================\n")
 
 
 if __name__ == "__main__":

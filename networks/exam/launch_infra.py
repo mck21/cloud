@@ -4,14 +4,16 @@ import sys
 
 # ==============================================================================
 # SCRIPT DE CREACIÓN DE INFRAESTRUCTURA AWS VPC (Boto3)
-# Descripción: Crea la misma infraestructura que el script bash original
+# Descripción: Crea una VPC con subredes públicas/privadas, NAT Gateway,
+#              tablas de ruteo, NACLs, Security Groups y lanza 2 instancias EC2.
+# Recursos: Todos llevan sufijo -mck21 y tag key=tag value=mck21
 # ==============================================================================
 
 # ==============================================================================
 # VARIABLES DE CONFIGURACIÓN
 # ==============================================================================
 TAG_KEY = "tag"
-TAG_VALUE = "mck21"
+TAG_VALUE = "mck21" # El tag es para borrar los recursos después con clean_mck21.py
 SUFFIX = "-mck21"
 VPC_CIDR = "10.10.0.0/16"
 PUB_SUB1_CIDR = "10.10.1.0/24"
@@ -710,10 +712,10 @@ print_message(YELLOW, "  INSTRUCCIONES DE ACCESO")
 print_message(YELLOW, "════════════════════════════════════════════════════════════════")
 print("\n")
 print(f"Para conectarte al Bastion, usa tu clave ({KEY_NAME}) y la IP Pública:")
-print(f"ssh -i {KEY_NAME}.pem ec2-user@{BASTION_IP or 'PUBLIC_IP_DEL_BASTION'}")
+print(f"ssh -i {KEY_NAME}.pem ubuntu@{BASTION_IP or 'PUBLIC_IP_DEL_BASTION'}")
 print("\n")
 print("Una vez en el Bastion, puedes acceder a la instancia privada usando el reenvío de agente (Agent Forwarding) o copiando tu clave a Bastion:")
-print(f"ssh ec2-user@{PRIVATE_IP}")
+print(f"ssh ubuntu@{PRIVATE_IP}")
 print("\n")
 
 print_message(GREEN, "✓ Script completado exitosamente")

@@ -1,0 +1,359 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Infraestructura mck21 - VPC con EC2 y RDS con encadenamiento de Security Groups'
+
+Parameters:
+  DBPassword:
+    Description: 'Contraseña para las instancias RDS'
+    Type: String
+    NoEcho: true
+    MinLength: 8
+    Default: 'Mck21Password123!'
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 172.0.0.0/16
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: mck21-vpc
+        - Key: Project
+          Value: mck21
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: mck21-igw
+        - Key: Project
+          Value: mck21
+
+  AttachGateway:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Subnets Públicas
+  PublicSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.0.0.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: mck21-public-subnet-1
+        - Key: Project
+          Value: mck21
+
+  PublicSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.0.1.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: mck21-public-subnet-2
+        - Key: Project
+          Value: mck21
+
+  PublicSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.0.2.0/24
+      AvailabilityZone: !Select [2, !GetAZs '']
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: mck21-public-subnet-3
+        - Key: Project
+          Value: mck21
+
+  # Subnets Privadas
+  PrivateSubnet1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.0.10.0/24
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: mck21-private-subnet-1
+        - Key: Project
+          Value: mck21
+
+  PrivateSubnet2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.0.11.0/24
+      AvailabilityZone: !Select [1, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: mck21-private-subnet-2
+        - Key: Project
+          Value: mck21
+
+  PrivateSubnet3:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 172.0.12.0/24
+      AvailabilityZone: !Select [2, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: mck21-private-subnet-3
+        - Key: Project
+          Value: mck21
+
+  # Route Table Pública
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: mck21-public-rt
+        - Key: Project
+          Value: mck21
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachGateway
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociation2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet2
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnetRouteTableAssociation3:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet3
+      RouteTableId: !Ref PublicRouteTable
+
+  # Security Groups
+  SecurityGroupEC2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: mck21-gs-ec2
+      GroupDescription: Security group para instancias EC2
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+      Tags:
+        - Key: Name
+          Value: mck21-gs-ec2
+        - Key: Project
+          Value: mck21
+
+  SecurityGroupProxy:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: mck21-gs-proxy
+      GroupDescription: Security group proxy intermediario
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SecurityGroupEC2
+          Description: MySQL from EC2
+      Tags:
+        - Key: Name
+          Value: mck21-gs-proxy
+        - Key: Project
+          Value: mck21
+
+  SecurityGroupRDS:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: mck21-gs-rds
+      GroupDescription: Security group para RDS MySQL
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          SourceSecurityGroupId: !Ref SecurityGroupProxy
+          Description: MySQL from Proxy
+      Tags:
+        - Key: Name
+          Value: mck21-gs-rds
+        - Key: Project
+          Value: mck21
+
+  # Instancias EC2
+  EC2Instance1:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: t2.micro
+      SubnetId: !Ref PublicSubnet1
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
+        - !Ref SecurityGroupProxy
+      Tags:
+        - Key: Name
+          Value: mck21-ec2-1
+        - Key: Project
+          Value: mck21
+
+  EC2Instance2:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: t2.micro
+      SubnetId: !Ref PublicSubnet2
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
+        - !Ref SecurityGroupProxy
+      Tags:
+        - Key: Name
+          Value: mck21-ec2-2
+        - Key: Project
+          Value: mck21
+
+  EC2Instance3:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Sub '{{resolve:ssm:/aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2}}'
+      InstanceType: t2.micro
+      SubnetId: !Ref PublicSubnet3
+      SecurityGroupIds:
+        - !Ref SecurityGroupEC2
+        - !Ref SecurityGroupProxy
+      Tags:
+        - Key: Name
+          Value: mck21-ec2-3
+        - Key: Project
+          Value: mck21
+
+  # DB Subnet Group
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: mck21-db-subnet-group
+      DBSubnetGroupDescription: Subnet group para RDS mck21
+      SubnetIds:
+        - !Ref PrivateSubnet1
+        - !Ref PrivateSubnet2
+        - !Ref PrivateSubnet3
+      Tags:
+        - Key: Project
+          Value: mck21
+
+  # Instancias RDS
+  RDSInstance1:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: mck21-rds-1
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 20
+      VPCSecurityGroups:
+        - !Ref SecurityGroupRDS
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      BackupRetentionPeriod: 0
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: mck21-rds-1
+        - Key: Project
+          Value: mck21
+
+  RDSInstance2:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: mck21-rds-2
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 20
+      VPCSecurityGroups:
+        - !Ref SecurityGroupRDS
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      BackupRetentionPeriod: 0
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: mck21-rds-2
+        - Key: Project
+          Value: mck21
+
+  RDSInstance3:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBInstanceIdentifier: mck21-rds-3
+      DBInstanceClass: db.t3.micro
+      Engine: mysql
+      MasterUsername: admin
+      MasterUserPassword: !Ref DBPassword
+      AllocatedStorage: 20
+      VPCSecurityGroups:
+        - !Ref SecurityGroupRDS
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      BackupRetentionPeriod: 0
+      PubliclyAccessible: false
+      Tags:
+        - Key: Name
+          Value: mck21-rds-3
+        - Key: Project
+          Value: mck21
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    
+  EC2Instance1PublicIP:
+    Description: IP pública de EC2 Instance 1
+    Value: !GetAtt EC2Instance1.PublicIp
+    
+  EC2Instance2PublicIP:
+    Description: IP pública de EC2 Instance 2
+    Value: !GetAtt EC2Instance2.PublicIp
+    
+  EC2Instance3PublicIP:
+    Description: IP pública de EC2 Instance 3
+    Value: !GetAtt EC2Instance3.PublicIp
+    
+  RDSInstance1Endpoint:
+    Description: Endpoint de RDS Instance 1
+    Value: !GetAtt RDSInstance1.Endpoint.Address
+    
+  RDSInstance2Endpoint:
+    Description: Endpoint de RDS Instance 2
+    Value: !GetAtt RDSInstance2.Endpoint.Address
+    
+  RDSInstance3Endpoint:
+    Description: Endpoint de RDS Instance 3
+    Value: !GetAtt RDSInstance3.Endpoint.Address

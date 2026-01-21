@@ -2,7 +2,7 @@
 
 """
 Script: Borrar todos los recursos con tag mck21
-Elimina en orden correcto: EC2 → NAT Gateway → EIP → Subnets → Route Tables → Security Groups → IGW → VPC
+Elimina en orden correcto: EC2 → NAT Gateway → EIP → Subnets → Route Tables → Security Groups → IGW → VPC 
 """
 
 import boto3

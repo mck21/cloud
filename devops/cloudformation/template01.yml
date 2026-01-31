@@ -1,0 +1,199 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Stack con VPC + Subred Pública + EC2 condicional con validaciones
+
+# PARAMETERS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html
+Parameters:
+  CrearInstancia:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Determina si se crea o no la instancia EC2
+
+  TipoInstancia:
+    Type: String
+    Default: t3.micro
+    Description: Tipo de instancia EC2 a crear
+    AllowedValues:
+      - t3.small
+      - t3.micro
+
+# CONDITIONS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/conditions-section-structure.html
+Conditions:
+  DebeCrearInstancia: !Equals [!Ref CrearInstancia, "true"]
+
+# RULES
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/rules-section-structure.html
+Rules:
+  ValidarTipoInstancia:
+    RuleCondition: !Equals [!Ref CrearInstancia, "true"]
+    Assertions:
+      - Assert: !Or
+          - !Equals [!Ref TipoInstancia, "t3.small"]
+          - !Equals [!Ref TipoInstancia, "t3.micro"]
+        AssertDescription: "El tipo de instancia debe ser t3.small o t3.micro"
+
+Resources:
+
+  # VPC
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyVPC
+
+  # SUBNET PÚBLICA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  # GetAZs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getavailabilityzones.html
+  # Select: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-select.html
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: 10.0.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: PublicSubnet
+
+  # INTERNET GATEWAY
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-internetgateway.html
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: MyIGW
+
+  # ATTACHMENT IGW
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcgatewayattachment.html
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # ROUTE TABLE PÚBLICA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-routetable.html
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  # RUTA PÚBLICA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-route.html
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # ASOCIACIÓN SUBNET - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # SECURITY GROUP
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-securitygroup.html
+  InstanceSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Enable SSH access
+      VpcId: !Ref MyVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: EC2SG
+
+  # INSTANCIA EC2 (CONDICIONAL)
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-instance.html
+  # Condition: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/conditions-section-structure.html
+  # Join: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-join.html
+  # GetAtt: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html
+  # AWS::Region: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/pseudo-parameter-reference.html
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Condition: DebeCrearInstancia
+    Properties:
+      InstanceType: !Ref TipoInstancia
+      KeyName: vockey
+      ImageId: ami-0532be01f26a3de55
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref InstanceSecurityGroup
+      Tags:
+        - Key: Name
+          Value: !Join 
+            - "-"
+            - - !Ref AWS::Region
+              - !Ref AWS::StackName
+              - "mck21"
+        - Key: VPCID
+          Value: !GetAtt MyVPC.VpcId
+
+# OUTPUTS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html
+# If: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-conditions.html#intrinsic-function-reference-conditions-if
+Outputs:
+  VPCId:
+    Description: ID de la VPC creada
+    Value: !Ref MyVPC
+
+  PublicSubnetId:
+    Description: ID de la Subred Pública
+    Value: !Ref PublicSubnet
+
+  AvailabilityZone:
+    Description: Zona de disponibilidad utilizada
+    Value: !Select [0, !GetAZs ""]
+
+  EC2InstanceId:
+    Description: ID de la instancia EC2 (si fue creada)
+    Value: !If [DebeCrearInstancia, !Ref EC2Instance, "No creada"]
+
+  EC2PublicIP:
+    Description: IP pública de la instancia EC2 (si fue creada)
+    Value: !If [DebeCrearInstancia, !GetAtt EC2Instance.PublicIp, "No aplica"]
+
+  EC2NombreCompleto:
+    Description: Nombre completo generado para la instancia
+    Condition: DebeCrearInstancia
+    Value: !Join 
+      - "-"
+      - - !Ref AWS::Region
+        - !Ref AWS::StackName
+        - "mck21"
+
+# Comando para crear la pila (usar deploy si no se desea cambiar los parámetros por defecto):
+# aws cloudformation create-stack --stack-name stack01 --template-body file://template01.yml --parameters ParameterKey=CrearInstancia,ParameterValue=true ParameterKey=TipoInstancia,ParameterValue=t3.micro
+# aws cloudformation deploy --stack-name MiStack --template-file template01.yml
+
+# Comando para eliminar la pila:
+# aws cloudformation delete-stack --stack-name stack01
+
+# Comando para listar las pilas:
+# aws cloudformation list-stacks
+
+# Comando para actualizar la pila:
+# aws cloudformation update-stack --stack-name stack01 --template-body file://template01.yml --parameters ParameterKey=CrearInstancia,ParameterValue=true ParameterKey=TipoInstancia,ParameterValue=t3.micro

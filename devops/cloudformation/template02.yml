@@ -1,0 +1,196 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Stack con VPC multi-región usando Mappings y IGW condicional
+
+# PARAMETERS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html
+Parameters:
+  AdjuntarIGW:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Determina si se adjunta un Internet Gateway a la VPC
+
+# MAPPINGS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html
+Mappings:
+  RegionConfig:
+    us-east-1:
+      VPCCidr: 10.0.0.0/20
+      PublicSubnetCidr: 10.0.1.0/24
+      PrivateSubnetCidr: 10.0.2.0/24
+    eu-west-2:
+      VPCCidr: 172.16.0.0/20
+      PublicSubnetCidr: 172.16.1.0/24
+      PrivateSubnetCidr: 172.16.2.0/24
+
+# CONDITIONS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/conditions-section-structure.html
+Conditions:
+  DebeAdjuntarIGW: !Equals [!Ref AdjuntarIGW, "true"]
+
+Resources:
+
+  # VPC
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+  # FindInMap: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-findinmap.html
+  MyVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !FindInMap [RegionConfig, !Ref "AWS::Region", VPCCidr]
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub "VPC-${AWS::Region}-mck21"
+
+  # SUBNET PÚBLICA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  # GetAZs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getavailabilityzones.html
+  # Select: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-select.html
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !FindInMap [RegionConfig, !Ref "AWS::Region", PublicSubnetCidr]
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "PublicSubnet-${AWS::Region}-mck21"
+
+  # SUBNET PRIVADA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  PrivateSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MyVPC
+      CidrBlock: !FindInMap [RegionConfig, !Ref "AWS::Region", PrivateSubnetCidr]
+      MapPublicIpOnLaunch: false
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: !Sub "PrivateSubnet-${AWS::Region}-mck21"
+
+  # INTERNET GATEWAY
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-internetgateway.html
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Condition: DebeAdjuntarIGW
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "IGW-${AWS::Region}-mck21"
+
+  # ATTACHMENT IGW (CONDICIONAL)
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcgatewayattachment.html
+  # If: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-conditions.html#intrinsic-function-reference-conditions-if
+  AttachIGW:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Condition: DebeAdjuntarIGW
+    Properties:
+      VpcId: !Ref MyVPC
+      InternetGatewayId: !If [DebeAdjuntarIGW, !Ref InternetGateway, !Ref "AWS::NoValue"]
+
+  # ROUTE TABLE PÚBLICA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-routetable.html
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "PublicRT-${AWS::Region}-mck21"
+
+  # RUTA PÚBLICA (CONDICIONAL)
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-route.html
+  PublicRoute:
+    Type: AWS::EC2::Route
+    Condition: DebeAdjuntarIGW
+    DependsOn: AttachIGW
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # ASOCIACIÓN SUBNET PÚBLICA - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  SubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PublicSubnet
+      RouteTableId: !Ref PublicRouteTable
+
+  # ROUTE TABLE PRIVADA
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-routetable.html
+  PrivateRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MyVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "PrivateRT-${AWS::Region}-mck21"
+
+  # ASOCIACIÓN SUBNET PRIVADA - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  PrivateSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref PrivateSubnet
+      RouteTableId: !Ref PrivateRouteTable
+
+# OUTPUTS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html
+Outputs:
+  VPCId:
+    Description: ID de la VPC creada
+    Value: !Ref MyVPC
+
+  VPCCidrBlock:
+    Description: Bloque CIDR de la VPC según la región
+    Value: !FindInMap [RegionConfig, !Ref "AWS::Region", VPCCidr]
+
+  PublicSubnetId:
+    Description: ID de la Subred Pública
+    Value: !Ref PublicSubnet
+
+  PrivateSubnetId:
+    Description: ID de la Subred Privada
+    Value: !Ref PrivateSubnet
+
+  PublicAvailabilityZone:
+    Description: Zona de disponibilidad de la subred pública
+    Value: !Select [0, !GetAZs ""]
+
+  PrivateAvailabilityZone:
+    Description: Zona de disponibilidad de la subred privada
+    Value: !Select [1, !GetAZs ""]
+
+  InternetGatewayId:
+    Description: ID del Internet Gateway (si fue adjuntado)
+    Condition: DebeAdjuntarIGW
+    Value: !Ref InternetGateway
+
+  IGWAdjuntado:
+    Description: Indica si el IGW fue adjuntado
+    Value: !If [DebeAdjuntarIGW, "Sí adjuntado", "No adjuntado"]
+
+  RegionActual:
+    Description: Región donde se desplegó el stack
+    Value: !Ref "AWS::Region"
+
+# Comando para crear la pila en us-east-1:
+# aws cloudformation create-stack --stack-name stack02-useast1 --template-body file://template02.yml --region us-east-1 --parameters ParameterKey=AdjuntarIGW,ParameterValue=true
+
+# Comando para crear la pila en eu-west-2:
+# aws cloudformation create-stack --stack-name stack02-euwest2 --template-body file://template02.yml --region eu-west-2 --parameters ParameterKey=AdjuntarIGW,ParameterValue=true
+
+# Comando para deploy (sin parámetros explícitos):
+# aws cloudformation deploy --stack-name stack02 --template-file template02.yml --region us-east-1
+
+# Comando para eliminar la pila:
+# aws cloudformation delete-stack --stack-name stack02-useast1 --region us-east-1
+
+# Comando para listar las pilas:
+# aws cloudformation list-stacks --region us-east-1

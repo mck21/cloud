@@ -21,8 +21,11 @@ PUB_SUB2_CIDR = "10.10.2.0/24"
 PRIV_SUB1_CIDR = "10.10.3.0/24"
 PRIV_SUB2_CIDR = "10.10.4.0/24"
 REGION = "us-east-1"
+#REGION2 = "us-west-2"  
 KEY_NAME = "vockey"
-AMI_ID = "ami-0ecb62995f68bb549"  # Amazon Linux 2 AMI (x86_64) en us-east-1
+#OREGON_KEY_NAME = "oregon-key"  
+AMI_ID = "ami-07ff62358b87c7116"  # Amazon Linux 2 AMI (x86_64) en us-east-1 
+#OREGON_AMI_ID = "ami-00a8151272c45cd8e"  # Amazon Linux 2 AMI (x86_64) en us-west-2
 
 AZ1 = f"{REGION}a"
 AZ2 = f"{REGION}b"

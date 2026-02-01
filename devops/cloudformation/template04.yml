@@ -1,0 +1,399 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VPC con subredes públicas/privadas (HA), NAT Gateway, IGW y VPC Peering a VPC externa
+
+# PARAMETERS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html
+Parameters:
+  Environment:
+    Type: String
+    Default: Dev
+    AllowedValues:
+      - Dev
+      - Prod
+    Description: Tipo de entorno para etiquetado de recursos y mapeo de CIDRs
+
+  VPCCidr:
+    Type: String
+    Default: 20.0.0.0/16
+    Description: Bloque CIDR para la VPC
+
+  TargetVpcId:
+    Type: String
+    Description: ID de la VPC destino existente para Peering (ej. vpc-12345678)
+
+  TargetVpcCidr:
+    Type: String
+    Description: Bloque CIDR de la VPC destino para enrutamiento (ej. 10.0.0.0/16)
+    Default: 10.0.0.0/16
+
+# MAPPINGS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html
+Mappings:
+  EnvironmentCIDR:
+    Dev:
+      PublicSubnet1: 20.0.0.0/24
+      PublicSubnet2: 20.0.1.0/24
+      PrivateSubnet1: 20.0.10.0/24
+      PrivateSubnet2: 20.0.11.0/24
+    Prod:
+      PublicSubnet1: 20.0.100.0/24
+      PublicSubnet2: 20.0.101.0/24
+      PrivateSubnet1: 20.0.200.0/24
+      PrivateSubnet2: 20.0.201.0/24
+
+Resources:
+
+
+  # VPC
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpc.html
+  MiVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VPCCidr
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub "VPC-mck21-${Environment}"
+
+
+  # INTERNET GATEWAY
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-internetgateway.html
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub "IGW-mck21-${Environment}"
+
+  # ATTACHMENT IGW
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcgatewayattachment.html
+  VPCGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref MiVPC
+      InternetGatewayId: !Ref InternetGateway
+
+
+  # SUBNET PÚBLICA 1
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  # FindInMap: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-findinmap.html
+  # GetAZs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getavailabilityzones.html
+  # Select: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-select.html
+  SubredPublica1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MiVPC
+      CidrBlock: !FindInMap [EnvironmentCIDR, !Ref Environment, PublicSubnet1]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Subnet-Public-1-${Environment}-mck21"
+
+  # SUBNET PÚBLICA 2
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  SubredPublica2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MiVPC
+      CidrBlock: !FindInMap [EnvironmentCIDR, !Ref Environment, PublicSubnet2]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub "Subnet-Public-2-${Environment}-mck21"
+
+  # ROUTE TABLE PÚBLICA (Compartida para ambas subredes públicas - práctica estándar para HA)
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-routetable.html
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MiVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "RT-Public-${Environment}-mck21"
+
+  # RUTA PÚBLICA HACIA INTERNET
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-route.html
+  RoutePublicInternet:
+    Type: AWS::EC2::Route
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # ASOCIACIÓN SUBNET PÚBLICA 1 - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  AsociacionSubnetPublica1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPublica1
+      RouteTableId: !Ref RouteTablePublic
+
+  # ASOCIACIÓN SUBNET PÚBLICA 2 - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  AsociacionSubnetPublica2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPublica2
+      RouteTableId: !Ref RouteTablePublic
+
+
+  # SUBNET PRIVADA 1
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  SubredPrivada1:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MiVPC
+      CidrBlock: !FindInMap [EnvironmentCIDR, !Ref Environment, PrivateSubnet1]
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "Subnet-Private-1-${Environment}-mck21"
+
+  # SUBNET PRIVADA 2
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnet.html
+  SubredPrivada2:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref MiVPC
+      CidrBlock: !FindInMap [EnvironmentCIDR, !Ref Environment, PrivateSubnet2]
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub "Subnet-Private-2-${Environment}-mck21"
+
+  # ROUTE TABLE PRIVADA (Compartida para ambas subredes privadas)
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-routetable.html
+  RouteTablePrivate:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref MiVPC
+      Tags:
+        - Key: Name
+          Value: !Sub "RT-Private-${Environment}-mck21"
+
+  # ASOCIACIÓN SUBNET PRIVADA 1 - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  AsociacionSubnetPrivada1:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPrivada1
+      RouteTableId: !Ref RouteTablePrivate
+
+  # ASOCIACIÓN SUBNET PRIVADA 2 - ROUTE TABLE
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-subnetroutetableassociation.html
+  AsociacionSubnetPrivada2:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubredPrivada2
+      RouteTableId: !Ref RouteTablePrivate
+
+
+  # ELASTIC IP PARA NAT GATEWAY
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-eip.html
+  EIPNatGateway:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub "EIP-NAT-${Environment}-mck21"
+
+  # NAT GATEWAY
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-natgateway.html
+  # GetAtt: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html
+  NATGateway:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt EIPNatGateway.AllocationId
+      SubnetId: !Ref SubredPublica1
+      Tags:
+        - Key: Name
+          Value: !Sub "NAT-GW-${Environment}-mck21"
+
+  # RUTA PRIVADA HACIA NAT GATEWAY
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-route.html
+  RoutePrivateNAT:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NATGateway
+
+
+  # VPC PEERING CONNECTION
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-vpcpeeringconnection.html
+  VPCPeeringConnection:
+    Type: AWS::EC2::VPCPeeringConnection
+    Properties:
+      VpcId: !Ref MiVPC
+      PeerVpcId: !Ref TargetVpcId
+      Tags:
+        - Key: Name
+          Value: !Sub "Peering-to-${TargetVpcId}-mck21"
+
+  # RUTA PRIVADA HACIA VPC DESTINO (Tráfico desde subredes privadas hacia VPC Peer)
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-route.html
+  RoutePrivateToPeer:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      DestinationCidrBlock: !Ref TargetVpcCidr
+      VpcPeeringConnectionId: !Ref VPCPeeringConnection
+
+# OUTPUTS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html
+Outputs:
+  VPCID:
+    Description: ID de la VPC
+    Value: !Ref MiVPC
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCID"
+
+  VPCCidrBlock:
+    Description: Bloque CIDR de la VPC
+    Value: !GetAtt MiVPC.CidrBlock
+
+  SubnetPublica1ID:
+    Description: ID de la Subnet Pública 1
+    Value: !Ref SubredPublica1
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetPublica1"
+
+  SubnetPublica2ID:
+    Description: ID de la Subnet Pública 2
+    Value: !Ref SubredPublica2
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetPublica2"
+
+  SubnetPrivada1ID:
+    Description: ID de la Subnet Privada 1
+    Value: !Ref SubredPrivada1
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetPrivada1"
+
+  SubnetPrivada2ID:
+    Description: ID de la Subnet Privada 2
+    Value: !Ref SubredPrivada2
+    Export:
+      Name: !Sub "${AWS::StackName}-SubnetPrivada2"
+
+  PublicSubnet1AZ:
+    Description: Zona de disponibilidad de la Subnet Pública 1
+    Value: !GetAtt SubredPublica1.AvailabilityZone
+
+  PublicSubnet2AZ:
+    Description: Zona de disponibilidad de la Subnet Pública 2
+    Value: !GetAtt SubredPublica2.AvailabilityZone
+
+  PrivateSubnet1AZ:
+    Description: Zona de disponibilidad de la Subnet Privada 1
+    Value: !GetAtt SubredPrivada1.AvailabilityZone
+
+  PrivateSubnet2AZ:
+    Description: Zona de disponibilidad de la Subnet Privada 2
+    Value: !GetAtt SubredPrivada2.AvailabilityZone
+
+  NATGatewayID:
+    Description: ID del NAT Gateway
+    Value: !Ref NATGateway
+    Export:
+      Name: !Sub "${AWS::StackName}-NATGateway"
+
+  NATGatewayEIP:
+    Description: Elastic IP del NAT Gateway
+    Value: !Ref EIPNatGateway
+
+  InternetGatewayID:
+    Description: ID del Internet Gateway
+    Value: !Ref InternetGateway
+    Export:
+      Name: !Sub "${AWS::StackName}-InternetGateway"
+
+  VPCPeeringID:
+    Description: ID de la conexión de VPC Peering
+    Value: !Ref VPCPeeringConnection
+    Export:
+      Name: !Sub "${AWS::StackName}-VPCPeering"
+
+  Environment:
+    Description: Entorno de despliegue
+    Value: !Ref Environment
+
+# NOTA IMPORTANTE:
+# Antes de crear este stack, necesitas tener una VPC destino existente.
+# Obtén su VPC ID y CIDR block para usarlos como parámetros.
+
+# Comando para obtener VPC ID de una VPC existente:
+# aws ec2 describe-vpcs --query 'Vpcs[*].[VpcId,CidrBlock,Tags[?Key==`Name`].Value|[0]]' --output table
+
+# Comando para crear la pila en Dev con VPC Peering:
+# aws cloudformation create-stack \
+#   --stack-name stack04-vpc-peering-dev \
+#   --template-body file://template04.yml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Dev \
+#     ParameterKey=VPCCidr,ParameterValue=20.0.0.0/16 \
+#     ParameterKey=TargetVpcId,ParameterValue=vpc-0123456789abcdef0 \
+#     ParameterKey=TargetVpcCidr,ParameterValue=10.0.0.0/16
+
+# Comando para crear la pila en Prod:
+# aws cloudformation create-stack \
+#   --stack-name stack04-vpc-peering-prod \
+#   --template-body file://template04.yml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Prod \
+#     ParameterKey=TargetVpcId,ParameterValue=vpc-0123456789abcdef0 \
+#     ParameterKey=TargetVpcCidr,ParameterValue=10.0.0.0/16
+
+# Comando para deploy (requiere archivo de parámetros):
+# aws cloudformation deploy \
+#   --stack-name stack04-vpc-peering \
+#   --template-file template04.yml \
+#   --parameter-overrides \
+#     Environment=Dev \
+#     TargetVpcId=vpc-0123456789abcdef0 \
+#     TargetVpcCidr=10.0.0.0/16
+
+# Comando para actualizar el stack:
+# aws cloudformation update-stack \
+#   --stack-name stack04-vpc-peering-dev \
+#   --template-body file://template04.yml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Dev \
+#     ParameterKey=TargetVpcId,ParameterValue=vpc-0123456789abcdef0 \
+#     ParameterKey=TargetVpcCidr,ParameterValue=10.0.0.0/16
+
+# Comando para eliminar la pila:
+# aws cloudformation delete-stack --stack-name stack04-vpc-peering-dev
+
+# Comando para describir outputs:
+# aws cloudformation describe-stacks --stack-name stack04-vpc-peering-dev --query 'Stacks[0].Outputs'
+
+# Comando para listar todas las pilas:
+# aws cloudformation list-stacks --stack-status-filter CREATE_COMPLETE UPDATE_COMPLETE
+
+# Comando para validar la plantilla antes de crear:
+# aws cloudformation validate-template --template-body file://template04.yml
+
+# Comando para obtener eventos del stack (útil para debugging):
+# aws cloudformation describe-stack-events --stack-name stack04-vpc-peering-dev --max-items 20
+
+# IMPORTANTE: Para que el VPC Peering funcione completamente:
+# 1. Debes aceptar la conexión de peering en la VPC destino (si está en otra cuenta)
+# 2. Agregar rutas en la tabla de rutas de la VPC destino apuntando hacia esta VPC
+# 3. Configurar Security Groups para permitir el tráfico entre VPCs
+
+# Comando para aceptar VPC Peering (desde la cuenta destino):
+# aws ec2 accept-vpc-peering-connection --vpc-peering-connection-id pcx-xxxxxxxxx
+
+# Comando para agregar ruta en VPC destino (desde la cuenta destino):
+# aws ec2 create-route \
+#   --route-table-id rtb-xxxxxxxxx \
+#   --destination-cidr-block 20.0.0.0/16 \
+#   --vpc-peering-connection-id pcx-xxxxxxxxx

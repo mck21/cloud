@@ -1,0 +1,404 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Despliegue de Base de Datos RDS MySQL Multi-AZ en subredes privadas
+
+# PARAMETERS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html
+Parameters:
+  Environment:
+    Type: String
+    Default: Dev
+    AllowedValues:
+      - Dev
+      - Prod
+    Description: Tipo de entorno para selección de recursos y configuración
+
+  VPCId:
+    Type: AWS::EC2::VPC::Id
+    Description: ID de la VPC donde se desplegará RDS
+
+  PrivateSubnet1Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID de la primera subred privada
+
+  PrivateSubnet2Id:
+    Type: AWS::EC2::Subnet::Id
+    Description: ID de la segunda subred privada
+
+  PrivateSubnetCidr1:
+    Type: String
+    Default: 20.0.10.0/24
+    Description: CIDR de la primera subred privada (para Security Group)
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+
+  PrivateSubnetCidr2:
+    Type: String
+    Default: 20.0.11.0/24
+    Description: CIDR de la segunda subred privada (para Security Group)
+    AllowedPattern: ^(([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])\.){3}([0-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])(\/([0-9]|[1-2][0-9]|3[0-2]))$
+
+  DBEngineVersion:
+    Type: String
+    Default: "8.0.40"
+    Description: Versión del motor de base de datos MySQL
+    AllowedValues:
+      - "8.0.40"
+      - "8.0.39"
+      - "8.0.38"
+
+  DBMasterUsername:
+    Type: String
+    Default: admin
+    Description: Nombre de usuario maestro para la base de datos
+    MinLength: 1
+    MaxLength: 16
+    AllowedPattern: ^[a-zA-Z][a-zA-Z0-9]*$
+    ConstraintDescription: Debe comenzar con una letra y contener solo caracteres alfanuméricos
+
+  DBMasterPassword:
+    Type: String
+    NoEcho: true
+    Description: Contrasenya maestra para la base de datos (mínimo 8 caracteres)
+    MinLength: 8
+    MaxLength: 41
+    AllowedPattern: ^[a-zA-Z0-9]*$
+    ConstraintDescription: Debe contener solo caracteres alfanuméricos
+
+  DBName:
+    Type: String
+    Default: mck21database
+    Description: Nombre de la base de datos inicial
+    MinLength: 1
+    MaxLength: 64
+    AllowedPattern: ^[a-zA-Z][a-zA-Z0-9]*$
+
+  AllocatedStorage:
+    Type: Number
+    Default: 20
+    Description: Tamanyo de almacenamiento en GB
+    MinValue: 20
+    MaxValue: 1000
+
+  BackupRetentionPeriod:
+    Type: Number
+    Default: 7
+    Description: Días de retención de backups automáticos
+    MinValue: 0
+    MaxValue: 35
+
+  MultiAZEnabled:
+    Type: String
+    Default: "true"
+    AllowedValues:
+      - "true"
+      - "false"
+    Description: Habilitar Multi-AZ para alta disponibilidad
+
+# MAPPINGS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html
+Mappings:
+  EnvironmentConfig:
+    Dev:
+      DBInstanceClass: db.t3.micro
+      AllocatedStorage: 20
+      MultiAZ: false
+      BackupRetention: 1
+    Prod:
+      DBInstanceClass: db.t3.small
+      AllocatedStorage: 100
+      MultiAZ: true
+      BackupRetention: 7
+
+# CONDITIONS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/conditions-section-structure.html
+Conditions:
+  IsProduction: !Equals [!Ref Environment, "Prod"]
+  EnableMultiAZ: !Equals [!Ref MultiAZEnabled, "true"]
+
+Resources:
+
+  # SECURITY GROUP RDS
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-ec2-securitygroup.html
+  RDSSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub "SG-RDS-MySQL-${Environment}-mck21"
+      GroupDescription: Security Group para RDS MySQL - Solo acceso desde subredes privadas
+      VpcId: !Ref VPCId
+      SecurityGroupIngress:
+        # Permitir acceso MySQL desde subred privada 1
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !Ref PrivateSubnetCidr1
+          Description: MySQL access from Private Subnet 1
+        # Permitir acceso MySQL desde subred privada 2
+        - IpProtocol: tcp
+          FromPort: 3306
+          ToPort: 3306
+          CidrIp: !Ref PrivateSubnetCidr2
+          Description: MySQL access from Private Subnet 2
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic
+      Tags:
+        - Key: Name
+          Value: !Sub "SG-RDS-${Environment}-mck21"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # DB SUBNET GROUP
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbsubnetgroup.html
+  DBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupName: !Sub "db-subnet-group-${Environment}-mck21"
+      DBSubnetGroupDescription: !Sub "Subnet Group para RDS en entorno ${Environment}"
+      SubnetIds:
+        - !Ref PrivateSubnet1Id
+        - !Ref PrivateSubnet2Id
+      Tags:
+        - Key: Name
+          Value: !Sub "DBSubnetGroup-${Environment}-mck21"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # DB PARAMETER GROUP
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbparametergroup.html
+  DBParameterGroup:
+    Type: AWS::RDS::DBParameterGroup
+    Properties:
+      DBParameterGroupName: !Sub "mysql-params-${Environment}-mck21"
+      Description: !Sub "Parameter Group personalizado para MySQL ${Environment}"
+      Family: mysql8.0
+      Parameters:
+        max_connections: !If [IsProduction, 150, 50]
+        slow_query_log: 1
+        long_query_time: 2
+      Tags:
+        - Key: Name
+          Value: !Sub "DBParamGroup-${Environment}-mck21"
+        - Key: Environment
+          Value: !Ref Environment
+
+  # RDS INSTANCE MYSQL MULTI-AZ
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-rds-dbinstance.html
+  # FindInMap: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-findinmap.html
+  # If: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-conditions.html#intrinsic-function-reference-conditions-if
+  RDSInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Snapshot
+    UpdateReplacePolicy: Snapshot
+    Properties:
+      DBInstanceIdentifier: !Sub "mysql-${Environment}-mck21"
+      DBName: !Ref DBName
+      Engine: mysql
+      EngineVersion: !Ref DBEngineVersion
+      DBInstanceClass: !FindInMap [EnvironmentConfig, !Ref Environment, DBInstanceClass]
+      AllocatedStorage: !FindInMap [EnvironmentConfig, !Ref Environment, AllocatedStorage]
+      StorageType: gp3
+      StorageEncrypted: true
+      MasterUsername: !Ref DBMasterUsername
+      MasterUserPassword: !Ref DBMasterPassword
+      MultiAZ: !FindInMap [EnvironmentConfig, !Ref Environment, MultiAZ]
+      DBSubnetGroupName: !Ref DBSubnetGroup
+      VPCSecurityGroups:
+        - !Ref RDSSecurityGroup
+      DBParameterGroupName: !Ref DBParameterGroup
+      BackupRetentionPeriod: !FindInMap [EnvironmentConfig, !Ref Environment, BackupRetention]
+      PreferredBackupWindow: "03:00-04:00"
+      PreferredMaintenanceWindow: "sun:04:00-sun:05:00"
+      EnableCloudwatchLogsExports:
+        - error
+        - general
+        - slowquery
+      DeletionProtection: !If [IsProduction, true, false]
+      PubliclyAccessible: false
+      AutoMinorVersionUpgrade: true
+      CopyTagsToSnapshot: true
+      Tags:
+        - Key: Name
+          Value: !Sub "RDS-MySQL-${Environment}-mck21"
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Backup
+          Value: !If [IsProduction, "Enabled", "Basic"]
+
+# OUTPUTS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/outputs-section-structure.html
+# GetAtt: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html
+Outputs:
+  RDSInstanceId:
+    Description: ID de la instancia RDS
+    Value: !Ref RDSInstance
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSInstanceId"
+
+  RDSEndpoint:
+    Description: Endpoint de conexión de la base de datos
+    Value: !GetAtt RDSInstance.Endpoint.Address
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSEndpoint"
+
+  RDSPort:
+    Description: Puerto de conexión de la base de datos
+    Value: !GetAtt RDSInstance.Endpoint.Port
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSPort"
+
+  RDSConnectionString:
+    Description: String de conexión completo
+    Value: !Sub "mysql://${DBMasterUsername}@${RDSInstance.Endpoint.Address}:${RDSInstance.Endpoint.Port}/${DBName}"
+
+  DBSecurityGroupId:
+    Description: ID del Security Group de RDS
+    Value: !Ref RDSSecurityGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-RDSSecurityGroup"
+
+  DBSubnetGroupName:
+    Description: Nombre del DB Subnet Group
+    Value: !Ref DBSubnetGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-DBSubnetGroup"
+
+  DBParameterGroupName:
+    Description: Nombre del DB Parameter Group
+    Value: !Ref DBParameterGroup
+    Export:
+      Name: !Sub "${AWS::StackName}-DBParameterGroup"
+
+  DatabaseName:
+    Description: Nombre de la base de datos creada
+    Value: !Ref DBName
+
+  MasterUsername:
+    Description: Usuario maestro de la base de datos
+    Value: !Ref DBMasterUsername
+
+  EngineVersion:
+    Description: Versión del motor MySQL
+    Value: !Ref DBEngineVersion
+
+  MultiAZStatus:
+    Description: Estado de Multi-AZ
+    Value: !FindInMap [EnvironmentConfig, !Ref Environment, MultiAZ]
+
+  InstanceClass:
+    Description: Clase de instancia utilizada
+    Value: !FindInMap [EnvironmentConfig, !Ref Environment, DBInstanceClass]
+
+  StorageSize:
+    Description: Tamanyo de almacenamiento asignado (GB)
+    Value: !FindInMap [EnvironmentConfig, !Ref Environment, AllocatedStorage]
+
+  Environment:
+    Description: Entorno de despliegue
+    Value: !Ref Environment
+
+# NOTA IMPORTANTE:
+# Esta plantilla requiere una VPC con subredes privadas ya creadas.
+# Puedes usar los outputs de template04.yml para obtener los IDs necesarios.
+
+# Comando para obtener outputs del stack de red (template04):
+# aws cloudformation describe-stacks --stack-name stack04-vpc-peering-dev --query 'Stacks[0].Outputs'
+
+# Comando para crear la pila en Dev (usando outputs de stack anterior):
+# aws cloudformation create-stack \
+#   --stack-name stack05-rds-dev \
+#   --template-body file://template05-corregido.yml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Dev \
+#     ParameterKey=VPCId,ParameterValue=vpc-xxxxxxxxx \
+#     ParameterKey=PrivateSubnet1Id,ParameterValue=subnet-xxxxxxxxx \
+#     ParameterKey=PrivateSubnet2Id,ParameterValue=subnet-yyyyyyyyy \
+#     ParameterKey=PrivateSubnetCidr1,ParameterValue=20.0.10.0/24 \
+#     ParameterKey=PrivateSubnetCidr2,ParameterValue=20.0.11.0/24 \
+#     ParameterKey=DBEngineVersion,ParameterValue=8.0.35 \
+#     ParameterKey=DBMasterUsername,ParameterValue=admin \
+#     ParameterKey=DBMasterPassword,ParameterValue=MySecurePass123 \
+#     ParameterKey=DBName,ParameterValue=mck21database \
+#     ParameterKey=MultiAZEnabled,ParameterValue=false
+
+# Comando para crear la pila en Prod:
+# aws cloudformation create-stack \
+#   --stack-name stack05-rds-prod \
+#   --template-body file://template05-corregido.yml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Prod \
+#     ParameterKey=VPCId,ParameterValue=vpc-xxxxxxxxx \
+#     ParameterKey=PrivateSubnet1Id,ParameterValue=subnet-xxxxxxxxx \
+#     ParameterKey=PrivateSubnet2Id,ParameterValue=subnet-yyyyyyyyy \
+#     ParameterKey=DBMasterUsername,ParameterValue=admin \
+#     ParameterKey=DBMasterPassword,ParameterValue=MySecurePass123 \
+#     ParameterKey=MultiAZEnabled,ParameterValue=true
+
+# Comando para deploy (requiere archivo de parámetros):
+# aws cloudformation deploy \
+#   --stack-name stack05-rds-dev \
+#   --template-file template05-corregido.yml \
+#   --parameter-overrides \
+#     Environment=Dev \
+#     VPCId=vpc-xxxxxxxxx \
+#     PrivateSubnet1Id=subnet-xxxxxxxxx \
+#     PrivateSubnet2Id=subnet-yyyyyyyyy \
+#     DBMasterPassword=MySecurePass123
+
+# Comando para obtener el endpoint de RDS después del despliegue:
+# aws cloudformation describe-stacks \
+#   --stack-name stack05-rds-dev \
+#   --query 'Stacks[0].Outputs[?OutputKey==`RDSEndpoint`].OutputValue' \
+#   --output text
+
+# Comando para conectarse a RDS (desde una instancia EC2 en la VPC):
+# mysql -h $(aws cloudformation describe-stacks --stack-name stack05-rds-dev --query 'Stacks[0].Outputs[?OutputKey==`RDSEndpoint`].OutputValue' --output text) -u admin -p
+
+# Comando para actualizar el stack (ejemplo: cambiar tipo de instancia):
+# aws cloudformation update-stack \
+#   --stack-name stack05-rds-dev \
+#   --template-body file://template05-corregido.yml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Dev \
+#     ParameterKey=VPCId,UsePreviousValue=true \
+#     ParameterKey=PrivateSubnet1Id,UsePreviousValue=true \
+#     ParameterKey=PrivateSubnet2Id,UsePreviousValue=true \
+#     ParameterKey=DBMasterPassword,UsePreviousValue=true
+
+# Comando para eliminar la pila (CUIDADO: creará un snapshot automático):
+# aws cloudformation delete-stack --stack-name stack05-rds-dev
+
+# Comando para validar la plantilla:
+# aws cloudformation validate-template --template-body file://template05-corregido.yml
+
+# Comando para describir eventos del stack (debugging):
+# aws cloudformation describe-stack-events --stack-name stack05-rds-dev --max-items 20
+
+# Comando para listar snapshots de RDS:
+# aws rds describe-db-snapshots --db-instance-identifier mysql-dev-mck21
+
+# Comando para restaurar desde snapshot:
+# aws rds restore-db-instance-from-db-snapshot \
+#   --db-instance-identifier mysql-dev-mck21-restored \
+#   --db-snapshot-identifier rds:mysql-dev-mck21-2024-01-01-00-00
+
+# MEJORES PRÁCTICAS:
+# 1. NUNCA incluyas contrasenyas en texto plano en el código
+# 2. Usa AWS Secrets Manager o Parameter Store para credenciales
+# 3. Habilita cifrado en reposo (StorageEncrypted: true)
+# 4. Habilita Multi-AZ en Producción para alta disponibilidad
+# 5. Configura backups automáticos con retención adecuada
+# 6. Revisa y aplica parches de seguridad regularmente
+# 7. Monitorea con CloudWatch Logs habilitados
+# 8. Usa DeletionProtection en producción
+
+# Comando para crear secret en Secrets Manager (mejor práctica):
+# aws secretsmanager create-secret \
+#   --name rds/mysql/mck21/dev \
+#   --description "Credenciales RDS MySQL Dev" \
+#   --secret-string '{"username":"admin","password":"MySecurePass123"}'
+
+# Comando para rotar contrasenya de RDS:
+# aws rds modify-db-instance \
+#   --db-instance-identifier mysql-dev-mck21 \
+#   --master-user-password NewSecurePassword456 \
+#   --apply-immediately

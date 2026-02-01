@@ -1,0 +1,320 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: S3 Bucket with access policies and intelligent storage tiering - mck21
+
+# PARAMETERS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html
+Parameters:
+  BucketBaseName:
+    Type: String
+    Description: Base name for the S3 bucket (will be combined with account ID and mck21)
+    Default: data-storage
+    MinLength: 3
+    MaxLength: 40
+    AllowedPattern: '^[a-z0-9][a-z0-9-]*[a-z0-9]$'
+    ConstraintDescription: Must be between 3 and 40 characters, lowercase letters, numbers and hyphens only
+
+  AccessLevel:
+    Type: String
+    Description: Access level for the S3 bucket
+    Default: Private
+    AllowedValues:
+      - Private
+      - Public
+    ConstraintDescription: Must be either Private or Public
+
+  Environment:
+    Type: String
+    Description: Environment type for storage class selection
+    Default: Dev
+    AllowedValues:
+      - Dev
+      - Prod
+    ConstraintDescription: Must be either Dev or Prod
+
+  EnableVersioning:
+    Type: String
+    Description: Enable versioning for the S3 bucket
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+  EnableEncryption:
+    Type: String
+    Description: Enable server-side encryption for the S3 bucket
+    Default: 'true'
+    AllowedValues:
+      - 'true'
+      - 'false'
+
+# MAPPINGS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/mappings-section-structure.html
+Mappings:
+  StorageClassMap:
+    Dev:
+      DefaultClass: INTELLIGENT_TIERING
+      TransitionDays: 30
+    Prod:
+      DefaultClass: STANDARD
+      TransitionDays: 90
+
+  AccessLevelMap:
+    Private:
+      BlockPublicAcls: true
+      BlockPublicPolicy: true
+      IgnorePublicAcls: true
+      RestrictPublicBuckets: true
+    Public:
+      BlockPublicAcls: false
+      BlockPublicPolicy: false
+      IgnorePublicAcls: false
+      RestrictPublicBuckets: false
+
+# CONDITIONS
+# Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/conditions-section-structure.html
+Conditions:
+  # Condition to check if access level is Public
+  IsPublicAccess: !Equals [!Ref AccessLevel, 'Public']
+  
+  # Condition to check if access level is Private
+  IsPrivateAccess: !Equals [!Ref AccessLevel, 'Private']
+  
+  # Condition to enable versioning
+  EnableVersioningCondition: !Equals [!Ref EnableVersioning, 'true']
+  
+  # Condition to enable encryption
+  EnableEncryptionCondition: !Equals [!Ref EnableEncryption, 'true']
+
+# RESOURCES
+Resources:
+  # S3 BUCKET
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-s3-bucket.html
+  S3Bucketmck21:
+    Type: AWS::S3::Bucket
+    Properties:
+      # Sub: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-sub.html
+      BucketName: !Sub '${BucketBaseName}-${AWS::AccountId}-mck21'
+      
+      # If: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-conditions.html
+      VersioningConfiguration: !If
+        - EnableVersioningCondition
+        - Status: Enabled
+        - !Ref AWS::NoValue
+      
+      BucketEncryption: !If
+        - EnableEncryptionCondition
+        - ServerSideEncryptionConfiguration:
+            - ServerSideEncryptionByDefault:
+                SSEAlgorithm: AES256
+        - !Ref AWS::NoValue
+
+      # FindInMap: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-findinmap.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: !FindInMap [AccessLevelMap, !Ref AccessLevel, BlockPublicAcls]
+        BlockPublicPolicy: !FindInMap [AccessLevelMap, !Ref AccessLevel, BlockPublicPolicy]
+        IgnorePublicAcls: !FindInMap [AccessLevelMap, !Ref AccessLevel, IgnorePublicAcls]
+        RestrictPublicBuckets: !FindInMap [AccessLevelMap, !Ref AccessLevel, RestrictPublicBuckets]
+      
+      LifecycleConfiguration:
+        Rules:
+          - Id: TransitionToIntelligentTiering
+            Status: Enabled
+            Transitions:
+              - TransitionInDays: !FindInMap [StorageClassMap, !Ref Environment, TransitionDays]
+                StorageClass: !FindInMap [StorageClassMap, !Ref Environment, DefaultClass]
+          - Id: DeleteOldVersions
+            Status: !If [EnableVersioningCondition, Enabled, Disabled]
+            NoncurrentVersionExpirationInDays: 90
+          - Id: CleanupIncompleteUploads
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 7
+      
+      CorsConfiguration: !If
+        - IsPublicAccess
+        - CorsRules:
+            - AllowedHeaders:
+                - '*'
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+                - DELETE
+                - HEAD
+              AllowedOrigins:
+                - '*'
+              MaxAge: 3000
+        - !Ref AWS::NoValue
+      
+      Tags:
+        - Key: Name
+          Value: !Sub '${BucketBaseName}-mck21'
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: ManagedBy
+          Value: CloudFormation
+        - Key: Owner
+          Value: mck21
+
+  # BUCKET POLICY - Only for Public buckets
+  # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/aws-resource-s3-bucketpolicy.html
+  S3BucketPolicymck21:
+    Type: AWS::S3::BucketPolicy
+    Condition: IsPublicAccess
+    Properties:
+      Bucket: !Ref S3Bucketmck21
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:GetObject
+            Resource: !Sub '${S3Bucketmck21.Arn}/*'
+          - Sid: PublicListBucket
+            Effect: Allow
+            Principal: '*'
+            Action:
+              - s3:ListBucket
+            Resource: !GetAtt S3Bucketmck21.Arn
+
+  # BUCKET POLICY
+  S3BucketPolicyPrivatemck21:
+    Type: AWS::S3::BucketPolicy
+    Condition: IsPrivateAccess
+    Properties:
+      Bucket: !Ref S3Bucketmck21
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: DenyInsecureConnections
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !GetAtt S3Bucketmck21.Arn
+              - !Sub '${S3Bucketmck21.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+          - Sid: AllowAccountAccess
+            Effect: Allow
+            Principal:
+              AWS: !Sub 'arn:aws:iam::${AWS::AccountId}:root'
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !GetAtt S3Bucketmck21.Arn
+              - !Sub '${S3Bucketmck21.Arn}/*'
+Outputs:
+
+  BucketName:
+    Description: Name of the S3 bucket
+    Value: !Ref S3Bucketmck21
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketName'
+
+  # GetAtt: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/intrinsic-function-reference-getatt.html
+  BucketARN:
+    Description: ARN of the S3 bucket
+    Value: !GetAtt S3Bucketmck21.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketARN'
+
+  BucketUploadURL:
+    Description: URL for uploading files to the S3 bucket
+    Value: !Sub 'https://${S3Bucketmck21}.s3.${AWS::Region}.amazonaws.com'
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketUploadURL'
+
+  BucketDomainName:
+    Description: Domain name of the S3 bucket
+    Value: !GetAtt S3Bucketmck21.DomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketDomainName'
+
+  BucketRegionalDomainName:
+    Description: Regional domain name of the S3 bucket
+    Value: !GetAtt S3Bucketmck21.RegionalDomainName
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketRegionalDomainName'
+
+  BucketWebsiteURL:
+    Condition: IsPublicAccess
+    Description: Website URL of the S3 bucket (only for public buckets)
+    Value: !Sub 'http://${S3Bucketmck21}.s3-website-${AWS::Region}.amazonaws.com'
+    Export:
+      Name: !Sub '${AWS::StackName}-BucketWebsiteURL'
+
+  AccessLevel:
+    Description: Access level configured for the bucket
+    Value: !Ref AccessLevel
+    Export:
+      Name: !Sub '${AWS::StackName}-AccessLevel'
+
+  StorageClass:
+    Description: Storage class configured for the bucket
+    Value: !FindInMap [StorageClassMap, !Ref Environment, DefaultClass]
+    Export:
+      Name: !Sub '${AWS::StackName}-StorageClass'
+
+# ==================== AWS CLI COMMANDS ====================
+# 
+# CREATE STACK (Dev - Private):
+# aws cloudformation create-stack \
+#   --stack-name stack06-s3-mck21 \
+#   --template-body file://template06-s3-bucket.yaml \
+#   --parameters \
+#     ParameterKey=BucketBaseName,ParameterValue=data-storage \
+#     ParameterKey=AccessLevel,ParameterValue=Private \
+#     ParameterKey=Environment,ParameterValue=Dev \
+#     ParameterKey=EnableVersioning,ParameterValue=true \
+#     ParameterKey=EnableEncryption,ParameterValue=true \
+#   --region us-east-1
+#
+# CREATE STACK (Prod - Public):
+# aws cloudformation create-stack \
+#   --stack-name stack06-s3-public-mck21 \
+#   --template-body file://template06-s3-bucket.yaml \
+#   --parameters \
+#     ParameterKey=BucketBaseName,ParameterValue=public-assets \
+#     ParameterKey=AccessLevel,ParameterValue=Public \
+#     ParameterKey=Environment,ParameterValue=Prod \
+#     ParameterKey=EnableVersioning,ParameterValue=true \
+#     ParameterKey=EnableEncryption,ParameterValue=true \
+#   --region us-east-1
+#
+# VALIDATE TEMPLATE:
+# aws cloudformation validate-template \
+#   --template-body file://template06-s3-bucket.yaml \
+#   --region us-east-1
+#
+# DESCRIBE STACK:
+# aws cloudformation describe-stacks \
+#   --stack-name stack06-s3-mck21 \
+#   --region us-east-1
+#
+# DESCRIBE OUTPUTS:
+# aws cloudformation describe-stacks \
+#   --stack-name stack06-s3-mck21 \
+#   --query 'Stacks[0].Outputs' \
+#   --output table \
+#   --region us-east-1
+#
+# UPDATE STACK (Change Environment):
+# aws cloudformation update-stack \
+#   --stack-name stack06-s3-mck21 \
+#   --template-body file://template06-s3-bucket.yaml \
+#   --parameters \
+#     ParameterKey=Environment,ParameterValue=Prod \
+#   --region us-east-1
+#
+# DELETE STACK (WARNING: Empty bucket first):
+# aws s3 rm s3://data-storage-ACCOUNT_ID-mck21/ --recursive
+# aws cloudformation delete-stack \
+#   --stack-name stack06-s3-mck21 \
+#   --region us-east-1

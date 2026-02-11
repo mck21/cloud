@@ -1,6 +1,7 @@
 # Contexto para Desarrollo de Templates CloudFormation
 
 Este documento define las reglas, estructura y convenciones para desarrollar templates de AWS CloudFormation en este proyecto.
+Dado un enunciado a posteriori que definirá la infraestructura deseada, debes seguir las convenciones y estructura que te indica este contexto.
 
 ## Estructura del Archivo YAML
 
@@ -8,7 +9,7 @@ Los templates deben seguir esta estructura con comentarios específicos que incl
 
 ```yaml
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Descripción breve del stack en español
+Description: Descripción breve del stack en espanyol
 
 # PARAMETERS
 # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/parameters-section-structure.html
@@ -16,7 +17,7 @@ Parameters:
   # Definir parámetros aquí
   ExampleParam:
     Type: String
-    Description: Descripción en español
+    Description: Descripción en espanyol
 
 # CONDITIONS
 # Docs: https://docs.aws.amazon.com/AWSCloudFormation/latest/UserGuide/conditions-section-structure.html
@@ -49,12 +50,13 @@ Outputs:
 
 *   **Identificadores Lógicos (Logical IDs)**: Usar **Inglés** y PascalCase (e.g., `PublicSubnet`, `Environment`, `WebServer`).
 *   **Descripciones**: Usar **Español**.
-*   **Evitar caracteres especiales**: No usar la letra `ñ`, sustituir por `ny`.
+*   **Evitar caracteres especiales**: No usar la letra `ñ`, sustituir por `ny` en descripciones y nombres de cualquier cosa en la plantilla.
 *   **Grupos de Seguridad**: Usar el prefijo `GS-` para el nombre (Tag Name) o referencias donde aplique, para evitar errores con `sg-`.
 
-## Configuración Específica para EC2
+## Configuración Específica para RESOURCES
 
-Para todas las instancias EC2, usar obligatoriamente los siguientes valores predeterminados:
+La región por preferencia es us-east-1. En caso de requerir dos regiones según el enunciado, la segunda región a usar será us-west-2.
+Para todas las instancias EC2, usar obligatoriamente los siguientes valores por defecto:
 
 *   **AMI ID**: `ami-0532be01f26a3de55`
 *   **Key Name**: `vockey`

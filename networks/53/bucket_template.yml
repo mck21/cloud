@@ -1,0 +1,45 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'Bucket S3 con sitio web estatico'
+
+Parameters:
+  DomainName:
+    Type: String
+    Default: www.mck21.com
+    Description: Nombre del bucket y dominio
+
+Resources:
+  # Bucket S3 para el sitio web
+  WebsiteBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref DomainName
+      WebsiteConfiguration:
+        IndexDocument: index.html
+        ErrorDocument: error.html
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: false
+        BlockPublicPolicy: false
+        IgnorePublicAcls: false
+        RestrictPublicBuckets: false
+
+  # Política del bucket para acceso público
+  WebsiteBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref WebsiteBucket
+      PolicyDocument:
+        Statement:
+          - Sid: PublicReadGetObject
+            Effect: Allow
+            Principal: '*'
+            Action: s3:GetObject
+            Resource: !Sub '${WebsiteBucket.Arn}/*'
+
+Outputs:
+  WebsiteURL:
+    Description: URL del sitio web S3
+    Value: !GetAtt WebsiteBucket.WebsiteURL
+  
+  BucketName:
+    Description: Nombre del bucket
+    Value: !Ref WebsiteBucket

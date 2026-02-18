@@ -1,0 +1,375 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Lab Route 53 Weighted Routing Policy.
+  Crea: VPC, 2 Subnets públicas, IGW, SG, 3 EC2 con nginx,
+  ALB + Target Group + Listener, y 3 registros Weighted en R53.
+  Escenarios disponibles vía parámetro WeightScenario.
+
+# ─────────────────────────────────────────────────────────────────────
+#  PARÁMETROS
+# ─────────────────────────────────────────────────────────────────────
+Parameters:
+
+  HostedZoneId:
+    Type: AWS::Route53::HostedZone::Id
+    Description: ID de tu Hosted Zone en Route 53
+
+  DomainName:
+    Type: String
+    Description: "FQDN del registro a crear (ej: app.tudominio.com)"
+    AllowedPattern: "^[a-z0-9.-]+\\.[a-z]{2,}$"
+
+  KeyName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Key Pair existente para acceso SSH a las EC2
+
+  InstanceType:
+    Type: String
+    Default: t2.micro
+    AllowedValues: [t2.micro, t3.micro, t3.small]
+    Description: Tipo de instancia EC2
+
+  AmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: AMI Amazon Linux 2023 (se resuelve automáticamente por región)
+
+  WeightScenario:
+    Type: String
+    Default: Equitativo
+    AllowedValues:
+      - Equitativo
+      - NinetyTen
+      - ZeroEC2
+    Description: |
+      Escenario de pesos:
+        Equitativo → ALB=1  EC2-10=1  EC2-0=1  (~33% cada uno)
+        NinetyTen  → ALB=90 EC2-10=10 EC2-0=0  (90% / 10% / 0%)
+        ZeroEC2    → ALB=90 EC2-10=10 EC2-0=0  (igual que NinetyTen, EC2-0 sin tráfico)
+
+# ─────────────────────────────────────────────────────────────────────
+#  MAPPINGS — pesos según escenario
+# ─────────────────────────────────────────────────────────────────────
+Mappings:
+  ScenarioWeights:
+    Equitativo:
+      WeightALB:   1
+      WeightEC210: 1
+      WeightEC20:  1
+    NinetyTen:
+      WeightALB:   90
+      WeightEC210: 10
+      WeightEC20:  0
+    ZeroEC2:
+      WeightALB:   90
+      WeightEC210: 10
+      WeightEC20:  0
+
+# ─────────────────────────────────────────────────────────────────────
+#  RECURSOS
+# ─────────────────────────────────────────────────────────────────────
+Resources:
+
+  # ═══════════════════════════════════════════
+  #  VPC + NETWORKING
+  # ═══════════════════════════════════════════
+
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: r53-weighted-vpc
+
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: r53-weighted-igw
+
+  IGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+
+  SubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.1.0/24
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: r53-weighted-subnet-a
+
+  SubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      CidrBlock: 10.0.2.0/24
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: r53-weighted-subnet-b
+
+  RouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: r53-weighted-rt
+
+  PublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: IGWAttachment
+    Properties:
+      RouteTableId: !Ref RouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  SubnetARouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetA
+      RouteTableId: !Ref RouteTable
+
+  SubnetBRouteAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetB
+      RouteTableId: !Ref RouteTable
+
+  # ═══════════════════════════════════════════
+  #  SECURITY GROUP
+  # ═══════════════════════════════════════════
+
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: HTTP y SSH - Lab R53 Weighted
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: HTTP público
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH
+      Tags:
+        - Key: Name
+          Value: r53-weighted-sg
+
+  # ═══════════════════════════════════════════
+  #  EC2 — User Data común (nginx + label)
+  # ═══════════════════════════════════════════
+
+  EC2ALBBackend:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetA
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y nginx
+          systemctl start nginx
+          systemctl enable nginx
+          echo "<h1>Respuesta desde: ALB-Backend</h1>" > /usr/share/nginx/html/index.html
+      Tags:
+        - Key: Name
+          Value: ALB-Backend
+
+  EC2Directa10:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetA
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y nginx
+          systemctl start nginx
+          systemctl enable nginx
+          echo "<h1>Respuesta desde: EC2-Directa-10%</h1>" > /usr/share/nginx/html/index.html
+      Tags:
+        - Key: Name
+          Value: EC2-Directa-10%
+
+  EC2Directa0:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref AmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyName
+      SubnetId: !Ref SubnetB
+      SecurityGroupIds:
+        - !Ref SecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y nginx
+          systemctl start nginx
+          systemctl enable nginx
+          echo "<h1>Respuesta desde: EC2-Directa-0%</h1>" > /usr/share/nginx/html/index.html
+      Tags:
+        - Key: Name
+          Value: EC2-Directa-0%
+
+  # ═══════════════════════════════════════════
+  #  ALB + TARGET GROUP + LISTENER
+  # ═══════════════════════════════════════════
+
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name: r53-weighted-tg
+      Protocol: HTTP
+      Port: 80
+      VpcId: !Ref VPC
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 15
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      Targets:
+        - Id: !Ref EC2ALBBackend
+          Port: 80
+      Tags:
+        - Key: Name
+          Value: r53-weighted-tg
+
+  ALB:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    DependsOn: IGWAttachment
+    Properties:
+      Name: r53-weighted-alb
+      Type: application
+      Scheme: internet-facing
+      IpAddressType: ipv4
+      Subnets:
+        - !Ref SubnetA
+        - !Ref SubnetB
+      SecurityGroups:
+        - !Ref SecurityGroup
+      Tags:
+        - Key: Name
+          Value: r53-weighted-alb
+
+  ALBListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      LoadBalancerArn: !Ref ALB
+      Protocol: HTTP
+      Port: 80
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # ═══════════════════════════════════════════
+  #  ROUTE 53 — 3 registros Weighted
+  # ═══════════════════════════════════════════
+
+  # Registro 1: ALB (Alias record)
+  R53RecordALB:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      SetIdentifier: weighted-alb
+      Weight: !FindInMap [ScenarioWeights, !Ref WeightScenario, WeightALB]
+      AliasTarget:
+        HostedZoneId: !GetAtt ALB.CanonicalHostedZoneID
+        DNSName: !Sub "dualstack.${ALB.DNSName}."
+        EvaluateTargetHealth: true
+
+  # Registro 2: EC2 directa (10%)
+  R53RecordEC210:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      SetIdentifier: weighted-ec2-10
+      Weight: !FindInMap [ScenarioWeights, !Ref WeightScenario, WeightEC210]
+      TTL: "60"
+      ResourceRecords:
+        - !GetAtt EC2Directa10.PublicIp
+
+  # Registro 3: EC2 directa (0%)
+  R53RecordEC20:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref HostedZoneId
+      Name: !Ref DomainName
+      Type: A
+      SetIdentifier: weighted-ec2-0
+      Weight: !FindInMap [ScenarioWeights, !Ref WeightScenario, WeightEC20]
+      TTL: "60"
+      ResourceRecords:
+        - !GetAtt EC2Directa0.PublicIp
+
+# ─────────────────────────────────────────────────────────────────────
+#  OUTPUTS
+# ─────────────────────────────────────────────────────────────────────
+Outputs:
+
+  DomainEndpoint:
+    Description: URL pública del lab
+    Value: !Sub "http://${DomainName}"
+
+  ALBDns:
+    Description: DNS del Application Load Balancer
+    Value: !GetAtt ALB.DNSName
+
+  EC2Directa10IP:
+    Description: IP pública de EC2-Directa-10%
+    Value: !GetAtt EC2Directa10.PublicIp
+
+  EC2Directa0IP:
+    Description: IP pública de EC2-Directa-0%
+    Value: !GetAtt EC2Directa0.PublicIp
+
+  ScenarioActivo:
+    Description: Escenario de pesos activo
+    Value: !Ref WeightScenario
+
+  WeightALB:
+    Description: Peso del registro ALB
+    Value: !FindInMap [ScenarioWeights, !Ref WeightScenario, WeightALB]
+
+  WeightEC210:
+    Description: Peso del registro EC2-10%
+    Value: !FindInMap [ScenarioWeights, !Ref WeightScenario, WeightEC210]
+
+  WeightEC20:
+    Description: Peso del registro EC2-0%
+    Value: !FindInMap [ScenarioWeights, !Ref WeightScenario, WeightEC20]
+
+  ComandoPrueba:
+    Description: Comando para probar la distribución de tráfico
+    Value: !Sub "for i in {1..50}; do curl -s http://${DomainName}; echo; done | sort | uniq -c"

@@ -1,0 +1,490 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Movies CRUD – DynamoDB via API Gateway</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      min-height: 100vh;
+      padding: 24px;
+    }
+
+    header {
+      text-align: center;
+      margin-bottom: 32px;
+    }
+    header h1 {
+      font-size: 2rem;
+      font-weight: 700;
+      color: #f8fafc;
+    }
+    header p {
+      color: #94a3b8;
+      margin-top: 6px;
+      font-size: 0.9rem;
+    }
+
+    #config-bar {
+      background: #1e2433;
+      border: 1px solid #2d3a52;
+      border-radius: 12px;
+      padding: 16px 20px;
+      margin-bottom: 28px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    #config-bar label { color: #94a3b8; font-size: 0.85rem; white-space: nowrap; }
+    #api-url-input {
+      flex: 1;
+      min-width: 260px;
+      padding: 8px 12px;
+      background: #0f1117;
+      border: 1px solid #3b4a6b;
+      border-radius: 8px;
+      color: #f1f5f9;
+      font-size: 0.9rem;
+    }
+    #save-url-btn {
+      padding: 8px 18px;
+      background: #3b82f6;
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.85rem;
+      font-weight: 600;
+    }
+    #save-url-btn:hover { background: #2563eb; }
+    #url-status { font-size: 0.8rem; color: #4ade80; }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 20px;
+    }
+
+    .card {
+      background: #1e2433;
+      border-radius: 14px;
+      border: 1px solid #2d3a52;
+      overflow: hidden;
+    }
+
+    .card-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 16px 20px;
+      border-bottom: 1px solid #2d3a52;
+    }
+    .badge {
+      font-size: 0.7rem;
+      font-weight: 700;
+      padding: 3px 9px;
+      border-radius: 20px;
+      letter-spacing: 0.05em;
+    }
+    .badge-post  { background: #16a34a; color: #f0fdf4; }
+    .badge-get   { background: #2563eb; color: #eff6ff; }
+    .badge-put   { background: #d97706; color: #fffbeb; }
+    .badge-delete{ background: #dc2626; color: #fef2f2; }
+
+    .card-header h2 { font-size: 1rem; font-weight: 600; color: #f1f5f9; }
+    .card-header span.op { font-size: 0.75rem; color: #94a3b8; margin-left: auto; }
+
+    .card-body { padding: 18px 20px; }
+
+    .form-group { margin-bottom: 14px; }
+    .form-group label {
+      display: block;
+      font-size: 0.78rem;
+      color: #94a3b8;
+      margin-bottom: 5px;
+      font-weight: 500;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    .form-group input, .form-group textarea {
+      width: 100%;
+      padding: 9px 12px;
+      background: #0f1117;
+      border: 1px solid #2d3a52;
+      border-radius: 8px;
+      color: #f1f5f9;
+      font-size: 0.88rem;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus, .form-group textarea:focus {
+      outline: none;
+      border-color: #3b82f6;
+    }
+    .form-group textarea { resize: vertical; min-height: 60px; }
+
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+    .btn {
+      width: 100%;
+      padding: 10px;
+      border: none;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      font-weight: 600;
+      cursor: pointer;
+      margin-top: 6px;
+      transition: opacity 0.15s;
+    }
+    .btn:hover { opacity: 0.88; }
+    .btn-create { background: #16a34a; color: #f0fdf4; }
+    .btn-read   { background: #2563eb; color: #eff6ff; }
+    .btn-update { background: #d97706; color: #fffbeb; }
+    .btn-delete { background: #dc2626; color: #fef2f2; }
+
+    .response-box {
+      margin-top: 14px;
+      padding: 12px 14px;
+      background: #0f1117;
+      border: 1px solid #2d3a52;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-family: 'Courier New', monospace;
+      min-height: 52px;
+      color: #94a3b8;
+      white-space: pre-wrap;
+      word-break: break-all;
+      display: none;
+    }
+    .response-box.visible { display: block; }
+    .response-box.ok   { border-color: #16a34a; color: #4ade80; }
+    .response-box.err  { border-color: #dc2626; color: #f87171; }
+
+    .cli-block {
+      margin-top: 12px;
+      background: #0a0d14;
+      border: 1px solid #1e2a40;
+      border-radius: 8px;
+      padding: 12px 14px;
+    }
+    .cli-block p {
+      font-size: 0.7rem;
+      color: #64748b;
+      margin-bottom: 6px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+    }
+    .cli-block code {
+      font-size: 0.75rem;
+      color: #7dd3fc;
+      font-family: 'Courier New', monospace;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 36px;
+      color: #475569;
+      font-size: 0.78rem;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>🎬 Movies CRUD</h1>
+  <p>API Gateway &rarr; Lambda (Python) &rarr; DynamoDB &nbsp;|&nbsp; Tabla: <code>Movies</code> &nbsp;|&nbsp; Keys: <code>year (HASH)</code> + <code>genre (RANGE)</code></p>
+</header>
+
+<div id="config-bar">
+  <label>API Endpoint:</label>
+  <input id="api-url-input" type="text"
+    placeholder="https://XXXXXXXXXX.execute-api.us-east-1.amazonaws.com/prod" />
+  <button id="save-url-btn" onclick="saveUrl()">Guardar URL</button>
+  <span id="url-status"></span>
+</div>
+
+<div class="grid">
+
+  <!-- ── CREATE ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-post">POST</span>
+      <h2>CREATE – PutItem</h2>
+      <span class="op">3.2.2</span>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="form-group">
+          <label>Year</label>
+          <input id="c-year" type="number" placeholder="2013" value="2013"/>
+        </div>
+        <div class="form-group">
+          <label>Genre</label>
+          <input id="c-genre" type="text" placeholder="Action" value="Action"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Plot</label>
+        <textarea id="c-plot" placeholder="A Hollywood thriller...">A Hollywood thriller about Formula 1</textarea>
+      </div>
+      <div class="form-group">
+        <label>Rating (0–10)</label>
+        <input id="c-rating" type="number" step="0.1" placeholder="8.3" value="8.3"/>
+      </div>
+      <button class="btn btn-create" onclick="createMovie()">▶ Ejecutar PutItem</button>
+      <div id="c-response" class="response-box"></div>
+
+      <div class="cli-block">
+        <p>Equivalente AWS CLI</p>
+        <code>aws dynamodb put-item \
+  --table-name Movies \
+  --item '{
+    "year":  {"N": "2013"},
+    "genre": {"S": "Action"},
+    "info":  {"M": {
+      "plot":   {"S": "A Hollywood thriller..."},
+      "rating": {"N": "8.3"}
+    }}
+  }'</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── READ ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-get">GET</span>
+      <h2>READ – GetItem</h2>
+      <span class="op">3.2.3</span>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="form-group">
+          <label>Year</label>
+          <input id="r-year" type="number" placeholder="2013" value="2013"/>
+        </div>
+        <div class="form-group">
+          <label>Genre</label>
+          <input id="r-genre" type="text" placeholder="Action" value="Action"/>
+        </div>
+      </div>
+      <button class="btn btn-read" onclick="readMovie()">▶ Ejecutar GetItem</button>
+      <div id="r-response" class="response-box"></div>
+
+      <div class="cli-block">
+        <p>Equivalente AWS CLI</p>
+        <code>aws dynamodb get-item \
+  --table-name Movies \
+  --key '{
+    "year":  {"N": "2013"},
+    "genre": {"S": "Action"}
+  }'</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── UPDATE ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-put">PUT</span>
+      <h2>UPDATE – UpdateItem</h2>
+      <span class="op">3.2.4</span>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="form-group">
+          <label>Year</label>
+          <input id="u-year" type="number" placeholder="2013" value="2013"/>
+        </div>
+        <div class="form-group">
+          <label>Genre</label>
+          <input id="u-genre" type="text" placeholder="Action" value="Action"/>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Nuevo Plot</label>
+        <textarea id="u-plot" placeholder="Updated plot...">Based on the true story of F1 rivals Hunt vs Lauda</textarea>
+      </div>
+      <div class="form-group">
+        <label>Nuevo Rating</label>
+        <input id="u-rating" type="number" step="0.1" placeholder="8.5" value="8.5"/>
+      </div>
+      <button class="btn btn-update" onclick="updateMovie()">▶ Ejecutar UpdateItem</button>
+      <div id="u-response" class="response-box"></div>
+
+      <div class="cli-block">
+        <p>Equivalente AWS CLI</p>
+        <code>aws dynamodb update-item \
+  --table-name Movies \
+  --key '{
+    "year":  {"N": "2013"},
+    "genre": {"S": "Action"}
+  }' \
+  --update-expression \
+    "SET info.rating = :r, info.plot = :p" \
+  --expression-attribute-values '{
+    ":r": {"N": "8.5"},
+    ":p": {"S": "Updated plot..."}
+  }' \
+  --return-values UPDATED_NEW</code>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DELETE ── -->
+  <div class="card">
+    <div class="card-header">
+      <span class="badge badge-delete">DELETE</span>
+      <h2>DELETE – DeleteItem</h2>
+      <span class="op">3.2.5</span>
+    </div>
+    <div class="card-body">
+      <div class="row">
+        <div class="form-group">
+          <label>Year</label>
+          <input id="d-year" type="number" placeholder="2013" value="2013"/>
+        </div>
+        <div class="form-group">
+          <label>Genre</label>
+          <input id="d-genre" type="text" placeholder="Action" value="Action"/>
+        </div>
+      </div>
+      <button class="btn btn-delete" onclick="deleteMovie()">▶ Ejecutar DeleteItem</button>
+      <div id="d-response" class="response-box"></div>
+
+      <div class="cli-block">
+        <p>Equivalente AWS CLI</p>
+        <code>aws dynamodb delete-item \
+  --table-name Movies \
+  --key '{
+    "year":  {"N": "2013"},
+    "genre": {"S": "Action"}
+  }'</code>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<footer>
+  DynamoDB SDK for Python (Boto3) &nbsp;·&nbsp; API Gateway REST + Lambda Proxy &nbsp;·&nbsp; CORS enabled
+</footer>
+
+<script>
+  let API_BASE = localStorage.getItem('movies_api_url') || '';
+
+  window.onload = () => {
+    if (API_BASE) {
+      document.getElementById('api-url-input').value = API_BASE;
+      document.getElementById('url-status').textContent = '✓ URL cargada';
+    }
+  };
+
+  function saveUrl() {
+    API_BASE = document.getElementById('api-url-input').value.trim().replace(/\/$/, '');
+    localStorage.setItem('movies_api_url', API_BASE);
+    document.getElementById('url-status').textContent = '✓ Guardada';
+    setTimeout(() => document.getElementById('url-status').textContent = '', 2000);
+  }
+
+  function showResponse(id, data, isOk) {
+    const el = document.getElementById(id);
+    el.textContent = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
+    el.className = 'response-box visible ' + (isOk ? 'ok' : 'err');
+  }
+
+  function checkUrl() {
+    if (!API_BASE) {
+      alert('⚠️ Primero guarda la URL de la API en la barra superior.');
+      return false;
+    }
+    return true;
+  }
+
+  // ── 1. CREATE – PutItem ──────────────────────────────
+  async function createMovie() {
+    if (!checkUrl()) return;
+    const year   = parseInt(document.getElementById('c-year').value);
+    const genre  = document.getElementById('c-genre').value.trim();
+    const plot   = document.getElementById('c-plot').value.trim();
+    const rating = parseFloat(document.getElementById('c-rating').value);
+
+    try {
+      const res = await fetch(`${API_BASE}/movies`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, genre, info: { plot, rating } })
+      });
+      const data = await res.json();
+      showResponse('c-response', data, res.ok);
+    } catch (e) {
+      showResponse('c-response', 'Error de red: ' + e.message, false);
+    }
+  }
+
+  // ── 2. READ – GetItem ────────────────────────────────
+  async function readMovie() {
+    if (!checkUrl()) return;
+    const year  = document.getElementById('r-year').value;
+    const genre = encodeURIComponent(document.getElementById('r-genre').value.trim());
+
+    try {
+      const res = await fetch(`${API_BASE}/movies?year=${year}&genre=${genre}`);
+      const data = await res.json();
+      showResponse('r-response', data, res.ok);
+    } catch (e) {
+      showResponse('r-response', 'Error de red: ' + e.message, false);
+    }
+  }
+
+  // ── 3. UPDATE – UpdateItem ───────────────────────────
+  async function updateMovie() {
+    if (!checkUrl()) return;
+    const year   = parseInt(document.getElementById('u-year').value);
+    const genre  = document.getElementById('u-genre').value.trim();
+    const plot   = document.getElementById('u-plot').value.trim();
+    const rating = parseFloat(document.getElementById('u-rating').value);
+
+    try {
+      const res = await fetch(`${API_BASE}/movies`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, genre, plot, rating })
+      });
+      const data = await res.json();
+      showResponse('u-response', data, res.ok);
+    } catch (e) {
+      showResponse('u-response', 'Error de red: ' + e.message, false);
+    }
+  }
+
+  // ── 4. DELETE – DeleteItem ───────────────────────────
+  async function deleteMovie() {
+    if (!checkUrl()) return;
+    const year  = parseInt(document.getElementById('d-year').value);
+    const genre = document.getElementById('d-genre').value.trim();
+
+    if (!confirm(`¿Eliminar género "${genre}" (${year})?`)) return;
+
+    try {
+      const res = await fetch(`${API_BASE}/movies`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ year, genre })
+      });
+      const data = await res.json();
+      showResponse('d-response', data, res.ok);
+    } catch (e) {
+      showResponse('d-response', 'Error de red: ' + e.message, false);
+    }
+  }
+</script>
+</body>
+</html>

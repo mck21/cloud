@@ -1,0 +1,297 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  CRUD completo: API Gateway + Lambda (Python) + DynamoDB (Movies)
+  Operaciones: PutItem, GetItem, UpdateItem, DeleteItem
+  CORS habilitado para uso desde HTML estático.
+  NOTA: La tabla DynamoDB "Movies" debe existir previamente.
+
+# ─────────────────────────────────────────────
+# LAMBDA FUNCTION (Python 3.12) - CRUD Handler
+# ─────────────────────────────────────────────
+Resources:
+
+  MoviesCRUDLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: MoviesCRUDFunction
+      Runtime: python3.12
+      Handler: index.handler
+      Role: arn:aws:iam::759859702800:role/LabRole
+      Timeout: 15
+      Environment:
+        Variables:
+          TABLE_NAME: Movies
+      Code:
+        ZipFile: |
+          import json
+          import boto3
+          import os
+          from boto3.dynamodb.conditions import Key
+          from decimal import Decimal
+
+          dynamodb = boto3.resource('dynamodb')
+          table = dynamodb.Table(os.environ['TABLE_NAME'])
+
+          # Helper: convert Decimal to int/float for JSON serialization
+          def decimal_default(obj):
+              if isinstance(obj, Decimal):
+                  return int(obj) if obj % 1 == 0 else float(obj)
+              raise TypeError
+
+          CORS_HEADERS = {
+              'Access-Control-Allow-Origin': '*',
+              'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key',
+              'Access-Control-Allow-Methods': 'GET,POST,PUT,DELETE,OPTIONS'
+          }
+
+          def handler(event, context):
+              print("Event:", json.dumps(event))
+              http_method = event.get('httpMethod', '')
+              path        = event.get('path', '')
+
+              # ── OPTIONS preflight (CORS) ──────────────────────
+              if http_method == 'OPTIONS':
+                  return {'statusCode': 200, 'headers': CORS_HEADERS, 'body': ''}
+
+              try:
+                  # ── CREATE  POST /movies ──────────────────────
+                  if http_method == 'POST' and path == '/movies':
+                      body  = json.loads(event.get('body', '{}'))
+                      year  = int(body['year'])
+                      genre = body['genre']
+                      info  = body.get('info', {})
+
+                      table.put_item(
+                          Item={
+                              'year':  year,
+                              'genre': genre,
+                              'info':  info
+                          }
+                      )
+                      return {
+                          'statusCode': 200,
+                          'headers': CORS_HEADERS,
+                          'body': json.dumps({'message': f'Movie genre "{genre}" ({year}) created successfully.'})
+                      }
+
+                  # ── READ  GET /movies?year=YYYY&genre=GGG ─────
+                  elif http_method == 'GET' and path == '/movies':
+                      params = event.get('queryStringParameters') or {}
+                      year   = int(params.get('year', 0))
+                      genre  = params.get('genre', '')
+
+                      if not year or not genre:
+                          return {
+                              'statusCode': 400,
+                              'headers': CORS_HEADERS,
+                              'body': json.dumps({'error': 'year and genre are required query params'})
+                          }
+
+                      response = table.get_item(
+                          Key={'year': year, 'genre': genre}
+                      )
+                      item = response.get('Item')
+                      if not item:
+                          return {
+                              'statusCode': 404,
+                              'headers': CORS_HEADERS,
+                              'body': json.dumps({'error': 'Movie not found'})
+                          }
+                      return {
+                          'statusCode': 200,
+                          'headers': CORS_HEADERS,
+                          'body': json.dumps(item, default=decimal_default)
+                      }
+
+                  # ── UPDATE  PUT /movies ───────────────────────
+                  elif http_method == 'PUT' and path == '/movies':
+                      body   = json.loads(event.get('body', '{}'))
+                      year   = int(body['year'])
+                      genre  = body['genre']
+                      rating = Decimal(str(body.get('rating', 0)))
+                      plot   = body.get('plot', '')
+
+                      response = table.update_item(
+                          Key={'year': year, 'genre': genre},
+                          UpdateExpression='SET info.rating = :r, info.plot = :p',
+                          ExpressionAttributeValues={':r': rating, ':p': plot},
+                          ReturnValues='UPDATED_NEW'
+                      )
+                      return {
+                          'statusCode': 200,
+                          'headers': CORS_HEADERS,
+                          'body': json.dumps({
+                              'message': f'Movie genre "{genre}" updated.',
+                              'updated': response.get('Attributes', {})
+                          }, default=decimal_default)
+                      }
+
+                  # ── DELETE  DELETE /movies ────────────────────
+                  elif http_method == 'DELETE' and path == '/movies':
+                      body  = json.loads(event.get('body', '{}'))
+                      year  = int(body['year'])
+                      genre = body['genre']
+
+                      table.delete_item(
+                          Key={'year': year, 'genre': genre}
+                      )
+                      return {
+                          'statusCode': 200,
+                          'headers': CORS_HEADERS,
+                          'body': json.dumps({'message': f'Movie genre "{genre}" ({year}) deleted.'})
+                      }
+
+                  else:
+                      return {
+                          'statusCode': 404,
+                          'headers': CORS_HEADERS,
+                          'body': json.dumps({'error': 'Route not found'})
+                      }
+
+              except Exception as e:
+                  print("Error:", str(e))
+                  return {
+                      'statusCode': 500,
+                      'headers': CORS_HEADERS,
+                      'body': json.dumps({'error': str(e)})
+                  }
+
+# ─────────────────────────────────────────────
+# API GATEWAY
+# ─────────────────────────────────────────────
+
+  MoviesAPI:
+    Type: AWS::ApiGateway::RestApi
+    Properties:
+      Name: MoviesCRUDApi
+      Description: API REST para CRUD de Movies en DynamoDB
+
+  # Resource: /movies
+  MoviesResource:
+    Type: AWS::ApiGateway::Resource
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      ParentId: !GetAtt MoviesAPI.RootResourceId
+      PathPart: movies
+
+  # ── Lambda permission ──────────────────────
+  LambdaApiPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !GetAtt MoviesCRUDLambda.Arn
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${MoviesAPI}/*/*/*'
+
+  # ── POST /movies (CREATE) ─────────────────
+  PostMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      ResourceId: !Ref MoviesResource
+      HttpMethod: POST
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MoviesCRUDLambda.Arn}/invocations'
+
+  # ── GET /movies (READ) ────────────────────
+  GetMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      ResourceId: !Ref MoviesResource
+      HttpMethod: GET
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MoviesCRUDLambda.Arn}/invocations'
+
+  # ── PUT /movies (UPDATE) ──────────────────
+  PutMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      ResourceId: !Ref MoviesResource
+      HttpMethod: PUT
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MoviesCRUDLambda.Arn}/invocations'
+
+  # ── DELETE /movies (DELETE) ───────────────
+  DeleteMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      ResourceId: !Ref MoviesResource
+      HttpMethod: DELETE
+      AuthorizationType: NONE
+      Integration:
+        Type: AWS_PROXY
+        IntegrationHttpMethod: POST
+        Uri: !Sub 'arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${MoviesCRUDLambda.Arn}/invocations'
+
+  # ── OPTIONS /movies (CORS preflight) ──────
+  OptionsMethod:
+    Type: AWS::ApiGateway::Method
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      ResourceId: !Ref MoviesResource
+      HttpMethod: OPTIONS
+      AuthorizationType: NONE
+      Integration:
+        Type: MOCK
+        RequestTemplates:
+          application/json: '{"statusCode": 200}'
+        IntegrationResponses:
+          - StatusCode: '200'
+            ResponseParameters:
+              method.response.header.Access-Control-Allow-Headers: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key'"
+              method.response.header.Access-Control-Allow-Methods: "'GET,POST,PUT,DELETE,OPTIONS'"
+              method.response.header.Access-Control-Allow-Origin: "'*'"
+            ResponseTemplates:
+              application/json: ''
+      MethodResponses:
+        - StatusCode: '200'
+          ResponseParameters:
+            method.response.header.Access-Control-Allow-Headers: true
+            method.response.header.Access-Control-Allow-Methods: true
+            method.response.header.Access-Control-Allow-Origin: true
+
+  # ── Deployment ────────────────────────────
+  APIDeployment:
+    Type: AWS::ApiGateway::Deployment
+    DependsOn:
+      - PostMethod
+      - GetMethod
+      - PutMethod
+      - DeleteMethod
+      - OptionsMethod
+    Properties:
+      RestApiId: !Ref MoviesAPI
+
+  APIStage:
+    Type: AWS::ApiGateway::Stage
+    Properties:
+      RestApiId: !Ref MoviesAPI
+      DeploymentId: !Ref APIDeployment
+      StageName: prod
+
+# ─────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────
+
+Outputs:
+  APIEndpoint:
+    Description: "URL base de la API - usa esta en el index.html"
+    Value: !Sub 'https://${MoviesAPI}.execute-api.${AWS::Region}.amazonaws.com/prod'
+    Export:
+      Name: MoviesCRUDApiEndpoint
+
+  LambdaFunction:
+    Description: "Función Lambda CRUD"
+    Value: !Ref MoviesCRUDLambda

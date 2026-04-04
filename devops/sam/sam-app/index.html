@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SAM App</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px; }
+        h1 { color: #232f3e; }
+        input { padding: 8px; margin: 5px; border: 1px solid #ccc; border-radius: 4px; }
+        button { padding: 8px 16px; background: #ff9900; color: white; border: none; border-radius: 4px; cursor: pointer; margin: 5px; }
+        button:hover { background: #e88a00; }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+        th { background: #232f3e; color: white; }
+        #message { color: green; margin: 10px 0; }
+    </style>
+</head>
+<body>
+    <h1>🛒 SAM App - DynamoDB Items</h1>
+
+    <h2>Añadir item</h2>
+    <input type="text" id="itemId" placeholder="ID" />
+    <input type="text" id="itemName" placeholder="Nombre" />
+    <button onclick="addItem()">Añadir</button>
+    <p id="message"></p>
+
+    <h2>Buscar por ID</h2>
+    <input type="text" id="searchId" placeholder="ID" />
+    <button onclick="getById()">Buscar</button>
+    <p id="searchResult"></p>
+
+    <h2>Todos los items</h2>
+    <button onclick="getAllItems()">Cargar todos</button>
+    <table>
+        <thead><tr><th>ID</th><th>Nombre</th></tr></thead>
+        <tbody id="itemsTable"></tbody>
+    </table>
+
+    <script>
+        const API_URL = "https://pnxq4g2h3i.execute-api.us-east-1.amazonaws.com/Prod";
+
+        async function getAllItems() {
+            const res = await fetch(`${API_URL}/`);
+            const items = await res.json();
+            const tbody = document.getElementById("itemsTable");
+            tbody.innerHTML = "";
+            items.forEach(item => {
+                tbody.innerHTML += `<tr><td>${item.id}</td><td>${item.name}</td></tr>`;
+            });
+        }
+
+        async function addItem() {
+            const id = document.getElementById("itemId").value;
+            const name = document.getElementById("itemName").value;
+            const res = await fetch(`${API_URL}/`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id, name })
+            });
+            const data = await res.json();
+            document.getElementById("message").textContent = `✅ Item añadido: ${data.id} - ${data.name}`;
+            getAllItems();
+        }
+
+        async function getById() {
+            const id = document.getElementById("searchId").value;
+            const res = await fetch(`${API_URL}/${id}`);
+            const item = await res.json();
+            document.getElementById("searchResult").textContent = 
+                item ? `✅ Encontrado: ${item.id} - ${item.name}` : "❌ No encontrado";
+        }
+    </script>
+</body>
+</html>

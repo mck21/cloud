@@ -1,0 +1,378 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Infraestructura para práctica VPN Site-to-Site (S2S) con Openswan.
+  Crea dos VPCs (Cloud y On-Prem), sus subredes, IGWs, security groups,
+  dos instancias EC2, Customer Gateway, Virtual Private Gateway y conexión VPN.
+
+Parameters:
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Nombre del Key Pair para acceder a las instancias EC2
+
+  OnPremAMI:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/amzn2-ami-hvm-x86_64-gp2
+    Description: AMI de Amazon Linux 2 (se resuelve automáticamente)
+
+  AuthorTag:
+    Type: String
+    Default: mck21
+    Description: Valor del tag author para todos los recursos
+
+# ─────────────────────────────────────────────
+# RECURSOS
+# ─────────────────────────────────────────────
+Resources:
+
+  # ══════════════════════════════════════════
+  # VPC CLOUD  (10.0.0.0/16)
+  # ══════════════════════════════════════════
+  CloudVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: Cloud-VPC
+        - Key: author
+          Value: !Ref AuthorTag
+
+  CloudSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref CloudVPC
+      CidrBlock: 10.0.0.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: Cloud-Subnet-Public
+        - Key: author
+          Value: !Ref AuthorTag
+
+  CloudIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: Cloud-IGW
+        - Key: author
+          Value: !Ref AuthorTag
+
+  CloudIGWAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CloudVPC
+      InternetGatewayId: !Ref CloudIGW
+
+  CloudRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref CloudVPC
+      Tags:
+        - Key: Name
+          Value: Cloud-RTB-Public
+        - Key: author
+          Value: !Ref AuthorTag
+
+  CloudDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: CloudIGWAttach
+    Properties:
+      RouteTableId: !Ref CloudRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref CloudIGW
+
+  CloudSubnetRTBAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref CloudSubnet
+      RouteTableId: !Ref CloudRouteTable
+
+  CloudSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG para Cloud-VPC - SSH, ICMP y trafico VPN
+      VpcId: !Ref CloudVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+          Description: ICMP ping
+        - IpProtocol: -1
+          CidrIp: 10.0.0.0/8
+          Description: Todo trafico interno redes 10.x
+      Tags:
+        - Key: Name
+          Value: Cloud-SG
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # ══════════════════════════════════════════
+  # VPC ON-PREM  (10.1.0.0/16)
+  # ══════════════════════════════════════════
+  OnPremVPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.1.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: OnPrem-VPC
+        - Key: author
+          Value: !Ref AuthorTag
+
+  OnPremSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref OnPremVPC
+      CidrBlock: 10.1.0.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs '']
+      Tags:
+        - Key: Name
+          Value: OnPrem-Subnet-Public
+        - Key: author
+          Value: !Ref AuthorTag
+
+  OnPremIGW:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: OnPrem-IGW
+        - Key: author
+          Value: !Ref AuthorTag
+
+  OnPremIGWAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref OnPremVPC
+      InternetGatewayId: !Ref OnPremIGW
+
+  OnPremRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref OnPremVPC
+      Tags:
+        - Key: Name
+          Value: OnPrem-RTB-Public
+        - Key: author
+          Value: !Ref AuthorTag
+
+  OnPremDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: OnPremIGWAttach
+    Properties:
+      RouteTableId: !Ref OnPremRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref OnPremIGW
+
+  OnPremSubnetRTBAssoc:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref OnPremSubnet
+      RouteTableId: !Ref OnPremRouteTable
+
+  OnPremSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SG para OnPrem-VPC - SSH, ICMP, UDP 500/4500 para IPsec
+      VpcId: !Ref OnPremVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH
+        - IpProtocol: icmp
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+          Description: ICMP ping
+        - IpProtocol: udp
+          FromPort: 500
+          ToPort: 500
+          CidrIp: 0.0.0.0/0
+          Description: IKE IPsec
+        - IpProtocol: udp
+          FromPort: 4500
+          ToPort: 4500
+          CidrIp: 0.0.0.0/0
+          Description: IPsec NAT-T
+        - IpProtocol: -1
+          CidrIp: 10.0.0.0/8
+          Description: Todo trafico interno redes 10.x
+      Tags:
+        - Key: Name
+          Value: OnPrem-SG
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # ══════════════════════════════════════════
+  # EC2 INSTANCIAS
+  # ══════════════════════════════════════════
+
+  # EC2-Cloud (máquina de prueba en Cloud-VPC)
+  EC2Cloud:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref OnPremAMI
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref CloudSubnet
+      SecurityGroupIds:
+        - !Ref CloudSecurityGroup
+      Tags:
+        - Key: Name
+          Value: ec2-cloud
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # EC2-OnPrem (servidor VPN con Openswan)
+  EC2OnPrem:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: t2.micro
+      ImageId: !Ref OnPremAMI
+      KeyName: !Ref KeyPairName
+      SubnetId: !Ref OnPremSubnet
+      SecurityGroupIds:
+        - !Ref OnPremSecurityGroup
+      # Source/Destination Check deshabilitado para reenvio de trafico VPN
+      SourceDestCheck: false
+      Tags:
+        - Key: Name
+          Value: ec2-onprem
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # ══════════════════════════════════════════
+  # VPN: Customer Gateway, VGW y Conexión
+  # ══════════════════════════════════════════
+
+  # Customer Gateway apunta a la IP pública de EC2-OnPrem
+  CustomerGW:
+    Type: AWS::EC2::CustomerGateway
+    DependsOn: EC2OnPrem
+    Properties:
+      Type: ipsec.1
+      BgpAsn: 65000
+      IpAddress: !GetAtt EC2OnPrem.PublicIp
+      Tags:
+        - Key: Name
+          Value: cgw-onprem
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # Virtual Private Gateway (lado AWS)
+  VirtualPrivateGW:
+    Type: AWS::EC2::VPNGateway
+    Properties:
+      Type: ipsec.1
+      Tags:
+        - Key: Name
+          Value: vgw-cloud
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # Adjuntar VGW a Cloud-VPC
+  VGWAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref CloudVPC
+      VpnGatewayId: !Ref VirtualPrivateGW
+
+  # Propagación automática de rutas VPN en la tabla de rutas de Cloud-VPC
+  VGWRoutePropagation:
+    Type: AWS::EC2::VPNGatewayRoutePropagation
+    DependsOn: VGWAttachment
+    Properties:
+      RouteTableIds:
+        - !Ref CloudRouteTable
+      VpnGatewayId: !Ref VirtualPrivateGW
+
+  # Conexión VPN Site-to-Site (enrutamiento estático)
+  VPNConnection:
+    Type: AWS::EC2::VPNConnection
+    DependsOn:
+      - VGWAttachment
+      - CustomerGW
+    Properties:
+      Type: ipsec.1
+      VpnGatewayId: !Ref VirtualPrivateGW
+      CustomerGatewayId: !Ref CustomerGW
+      StaticRoutesOnly: true
+      Tags:
+        - Key: Name
+          Value: s2svpn
+        - Key: author
+          Value: !Ref AuthorTag
+
+  # Ruta estática hacia la red On-Prem a través del túnel VPN
+  VPNStaticRoute:
+    Type: AWS::EC2::VPNConnectionRoute
+    Properties:
+      VpnConnectionId: !Ref VPNConnection
+      DestinationCidrBlock: 10.1.0.0/16
+
+  # Ruta en la tabla de rutas de On-Prem hacia Cloud a través de EC2-OnPrem
+  # (EC2-OnPrem actúa como gateway; Source/Dest check ya está deshabilitado)
+  OnPremToCloudRoute:
+    Type: AWS::EC2::Route
+    DependsOn: EC2OnPrem
+    Properties:
+      RouteTableId: !Ref OnPremRouteTable
+      DestinationCidrBlock: 10.0.0.0/16
+      InstanceId: !Ref EC2OnPrem
+
+# ─────────────────────────────────────────────
+# OUTPUTS
+# ─────────────────────────────────────────────
+Outputs:
+  EC2OnPremPublicIP:
+    Description: IP publica de EC2-OnPrem (usada como Customer Gateway)
+    Value: !GetAtt EC2OnPrem.PublicIp
+    Export:
+      Name: EC2OnPremPublicIP
+
+  EC2OnPremPrivateIP:
+    Description: IP privada de EC2-OnPrem
+    Value: !GetAtt EC2OnPrem.PrivateIp
+    Export:
+      Name: EC2OnPremPrivateIP
+
+  EC2CloudPrivateIP:
+    Description: IP privada de EC2-Cloud (objetivo del ping final)
+    Value: !GetAtt EC2Cloud.PrivateIp
+    Export:
+      Name: EC2CloudPrivateIP
+
+  EC2CloudPublicIP:
+    Description: IP publica de EC2-Cloud
+    Value: !GetAtt EC2Cloud.PublicIp
+    Export:
+      Name: EC2CloudPublicIP
+
+  VPNConnectionId:
+    Description: ID de la conexion VPN (para descargar la config de Openswan)
+    Value: !Ref VPNConnection
+    Export:
+      Name: VPNConnectionId
+
+  CustomerGatewayId:
+    Description: ID del Customer Gateway
+    Value: !Ref CustomerGW
+
+  VirtualPrivateGatewayId:
+    Description: ID del Virtual Private Gateway
+    Value: !Ref VirtualPrivateGW

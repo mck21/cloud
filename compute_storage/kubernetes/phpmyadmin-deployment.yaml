@@ -1,0 +1,50 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: phpmyadmin
+  labels:
+    app: wordpress
+spec:
+  ports:
+    - port: 80
+  selector:
+    app: wordpress
+    tier: phpmyadmin
+  type: LoadBalancer
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: phpmyadmin
+  labels:
+    app: wordpress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wordpress
+      tier: phpmyadmin
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: wordpress
+        tier: phpmyadmin
+    spec:
+      containers:
+      - image: phpmyadmin:5.2-apache
+        name: phpmyadmin
+        env:
+        - name: PMA_HOST
+          value: wordpress-mysql
+        - name: PMA_PORT
+          value: "3306"
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-pass
+              key: password
+        ports:
+        - containerPort: 80
+          name: phpmyadmin
